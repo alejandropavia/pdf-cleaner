@@ -10,27 +10,188 @@ from clean_pdf import clean_pdf, compress_with_ghostscript
 
 app = FastAPI(title="PDF Cleaner & Compressor")
 
-# --- LÍMITE FREE (demo) ---
+# =========
+# VERSION
+# =========
+APP_VERSION = "2025-12-24-v4"
+
+# =========
+# LIMITES (por IP)
+# =========
+# Free real (lo único que aplicamos ahora mismo)
 FREE_MAX_MB = 5
-FREE_DAILY_LIMIT = 1  # 1 PDF al día (por IP)
-DAILY_COUNTER = {}  # key=(ip, YYYY-MM-DD) -> count
+FREE_MONTHLY_LIMIT = 5  # 5 PDFs / mes
 
-# Sube esto cada deploy para ver si realmente se actualiza en producción
-APP_VERSION = "2025-12-24-v3"
+# Límites por plan (por ahora solo para mostrar en landing; luego Stripe)
+PRO_MAX_MB = 15
+PRO_MONTHLY_LIMIT = 50
+
+# "Ilimitado" práctico para Business para que no reviente Render
+# (en Render Free si subes 200MB puede petar por RAM/tiempo)
+BUSINESS_MAX_MB = 60
+BUSINESS_MONTHLY_LIMIT = 200
+
+# Contador en memoria: key=(ip, YYYY-MM) -> count
+# Nota: in-memory se reinicia con redeploy / sleep. Para producción: Redis/DB.
+MONTHLY_COUNTER = {}
 
 
+# =========
+# HTML: LANDING (/)
+# =========
+LANDING_HTML = rf"""
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>PDF Cleaner — comprime y limpia PDFs en segundos</title>
+  <style>
+    :root{{
+      --bg:#f7f8fa; --card:#fff; --text:#0f172a; --muted:#475569;
+      --line:#e5e7eb; --shadow:0 10px 30px rgba(0,0,0,0.08);
+      --btn:#111; --btn2:#fff;
+    }}
+    *{{box-sizing:border-box}}
+    body{{margin:0;background:var(--bg);color:var(--text);
+      font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial}}
+    .wrap{{max-width:1080px;margin:0 auto;padding:28px 18px 70px}}
+    .top{{display:flex;align-items:center;justify-content:space-between;gap:14px}}
+    .brand{{display:flex;align-items:center;gap:10px;font-weight:900}}
+    .badge{{font-size:12px;padding:6px 10px;border-radius:999px;background:#111;color:#fff}}
+    .nav{{display:flex;gap:14px;font-size:13px;color:var(--muted)}}
+    a{{color:inherit;text-decoration:none}}
+
+    .hero{{margin-top:18px;background:var(--card);border:1px solid var(--line);
+      border-radius:18px;padding:26px;box-shadow:var(--shadow);
+      display:grid;grid-template-columns:1.25fr 0.75fr;gap:18px}}
+    @media(max-width:900px){{.hero{{grid-template-columns:1fr}}}}
+    h1{{margin:0 0 10px;font-size:46px;line-height:1.05;letter-spacing:-1px}}
+    @media(max-width:520px){{h1{{font-size:34px}}}}
+    .sub{{margin:0 0 18px;color:var(--muted);font-size:15px;line-height:1.5}}
+    .ctaRow{{display:flex;gap:12px;flex-wrap:wrap}}
+    .btn{{border-radius:12px;padding:12px 16px;border:1px solid #111;
+      font-weight:800;font-size:14px;cursor:pointer;display:inline-flex;align-items:center;gap:8px}}
+    .btn.primary{{background:var(--btn);color:#fff}}
+    .btn.secondary{{background:var(--btn2);color:#111}}
+    .mini{{margin-top:10px;color:var(--muted);font-size:12px}}
+
+    .proof{{border:1px solid var(--line);border-radius:16px;padding:16px;background:#fafafa}}
+    .proof b{{display:block;margin-bottom:6px}}
+    .proof ul{{margin:0;padding-left:18px;color:var(--muted);font-size:13px}}
+    .proof li{{margin:6px 0}}
+
+    .pricing{{margin-top:18px;display:grid;grid-template-columns:repeat(3,1fr);gap:12px}}
+    @media(max-width:900px){{.pricing{{grid-template-columns:1fr}}}}
+    .plan{{background:#fff;border:1px solid var(--line);border-radius:18px;
+      padding:18px;box-shadow:0 8px 22px rgba(0,0,0,0.05)}}
+    .plan h3{{margin:0 0 6px}}
+    .price{{font-size:28px;font-weight:950;margin:6px 0 10px;letter-spacing:-0.5px}}
+    .plan ul{{margin:0;padding-left:18px;color:var(--muted);font-size:13px}}
+    .plan li{{margin:6px 0}}
+    .tag{{display:inline-block;font-size:12px;padding:4px 10px;border-radius:999px;border:1px solid var(--line);
+      color:var(--muted);margin-top:8px}}
+    .footer{{margin-top:22px;text-align:center;color:var(--muted);font-size:12px}}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="top">
+      <div class="brand"><span class="badge">B2B</span> PDF Cleaner</div>
+      <div class="nav">
+        <a href="#precios">Precios</a>
+        <a href="/app">Herramienta</a>
+      </div>
+    </div>
+
+    <section class="hero">
+      <div>
+        <h1>PDFs listos para enviar en segundos</h1>
+        <p class="sub">
+          Limpia páginas en blanco y comprime tus PDFs para email y portales.
+          Sin instalaciones. Resultado inmediato.
+        </p>
+
+        <div class="ctaRow">
+          <a class="btn primary" href="/app">✅ Probar gratis</a>
+          <a class="btn secondary" href="#precios">Ver planes</a>
+        </div>
+
+        <div class="mini">
+          Gratis: <b>{FREE_MONTHLY_LIMIT} PDFs/mes</b> · máx. <b>{FREE_MAX_MB} MB</b> · sin registro
+        </div>
+      </div>
+
+      <div class="proof">
+        <b>Perfecto si…</b>
+        <ul>
+          <li>Te rechazan el PDF por tamaño</li>
+          <li>Necesitas enviarlo por email rápido</li>
+          <li>Trabajas con PDFs escaneados pesados</li>
+        </ul>
+      </div>
+    </section>
+
+    <section id="precios" class="pricing">
+      <div class="plan">
+        <h3>Gratis</h3>
+        <div class="price">0€</div>
+        <ul>
+          <li>Hasta <b>{FREE_MONTHLY_LIMIT} PDFs/mes</b></li>
+          <li>Máx. <b>{FREE_MAX_MB} MB</b> por PDF</li>
+          <li>3 calidades (máxima por defecto)</li>
+        </ul>
+        <div class="tag">Para probar rápido</div>
+      </div>
+
+      <div class="plan">
+        <h3>Pro</h3>
+        <div class="price">9€ / mes</div>
+        <ul>
+          <li>Hasta <b>{PRO_MONTHLY_LIMIT} PDFs/mes</b></li>
+          <li>Máx. <b>{PRO_MAX_MB} MB</b> por PDF</li>
+          <li>Para uso frecuente</li>
+        </ul>
+        <div class="ctaRow" style="margin-top:12px;">
+          <a class="btn primary" href="/app">Empezar</a>
+        </div>
+      </div>
+
+      <div class="plan">
+        <h3>Business</h3>
+        <div class="price">A medida</div>
+        <ul>
+          <li>Hasta <b>{BUSINESS_MONTHLY_LIMIT} PDFs/mes</b></li>
+          <li><b>MB “ilimitados”</b> (práctico)</li>
+          <li>Prioridad alta</li>
+        </ul>
+        <div class="ctaRow" style="margin-top:12px;">
+          <a class="btn secondary" href="/app">Contactar</a>
+        </div>
+      </div>
+    </section>
+
+    <div class="footer">Versión: {APP_VERSION}</div>
+  </div>
+</body>
+</html>
+"""
+
+
+# =========
+# HTML: APP (/app)
+# =========
 APP_HTML = r"""
 <!doctype html>
 <html lang="es">
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>PDF Cleaner — comprime y limpia en segundos</title>
+  <title>PDF Cleaner — herramienta</title>
   <style>
     :root{
       --bg:#f7f8fa; --card:#ffffff; --text:#0f172a; --muted:#475569;
       --line:#e5e7eb; --shadow:0 10px 30px rgba(0,0,0,0.08);
-      --btn:#111; --btn2:#fff;
       --okbg:#ecfeff; --okline:#a5f3fc;
       --errbg:#fff2f2; --errline:#ffd0d0; --err:#7a1b1b;
     }
@@ -122,17 +283,17 @@ APP_HTML = r"""
         <div>PDF Cleaner</div>
       </div>
       <div class="nav">
-        <a href="#herramienta">Herramienta</a>
+        <a href="/">Landing</a>
       </div>
     </div>
 
     <section class="hero">
-      <h1>Comprime y limpia PDFs en segundos</h1>
-      <p class="sub">Ideal para enviar por email y subir a portales sin que te rechacen el archivo.</p>
-      <div class="hint"><b>Gratis:</b> 1 PDF/día · máx. 5 MB · sin registro</div>
+      <h1>Herramienta</h1>
+      <p class="sub">Sube tu PDF → lo limpiamos y comprimimos → descargas al momento.</p>
+      <div class="hint"><b>Gratis:</b> 5 PDFs/mes · máx. 5 MB · sin registro</div>
     </section>
 
-    <section id="herramienta" class="tool">
+    <section class="tool">
       <form id="pdfForm" enctype="multipart/form-data">
         <label>Archivo PDF</label>
         <input id="file" type="file" name="file" accept="application/pdf" required>
@@ -247,6 +408,7 @@ APP_HTML = r"""
         return;
       }
 
+      // Front limit (Free)
       const MAX_MB = 5;
       if (f.size > MAX_MB * 1024 * 1024) {
         showError("❌ Límite gratis: máximo " + MAX_MB + " MB por PDF.");
@@ -310,12 +472,19 @@ def get_client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
+def current_month_key(request: Request) -> tuple[str, str]:
+    ip = get_client_ip(request)
+    month = date.today().strftime("%Y-%m")  # YYYY-MM
+    return (ip, month)
+
+
 def cleanup_old_counters():
-    today = date.today().isoformat()
-    if len(DAILY_COUNTER) > 5000:
-        to_delete = [k for k in DAILY_COUNTER.keys() if k[1] != today]
+    # Si crece demasiado, borramos meses antiguos
+    current_month = date.today().strftime("%Y-%m")
+    if len(MONTHLY_COUNTER) > 5000:
+        to_delete = [k for k in MONTHLY_COUNTER.keys() if k[1] != current_month]
         for k in to_delete:
-            DAILY_COUNTER.pop(k, None)
+            MONTHLY_COUNTER.pop(k, None)
 
 
 @app.get("/version", response_class=PlainTextResponse)
@@ -323,8 +492,15 @@ def version():
     return APP_VERSION
 
 
+# Landing
 @app.get("/", response_class=HTMLResponse)
-def home():
+def landing():
+    return LANDING_HTML
+
+
+# App
+@app.get("/app", response_class=HTMLResponse)
+def app_page():
     return APP_HTML
 
 
@@ -343,16 +519,15 @@ async def process(
     if quality not in allowed_qualities:
         quality = "screen"
 
-    # Límite por IP y día
+    # Contador mensual (FREE)
     cleanup_old_counters()
-    ip = get_client_ip(request)
-    today = date.today().isoformat()
-    key = (ip, today)
-    used = DAILY_COUNTER.get(key, 0)
+    key = current_month_key(request)
+    used = MONTHLY_COUNTER.get(key, 0)
 
-    if used >= FREE_DAILY_LIMIT:
-        return HTMLResponse("❌ Límite gratis: 1 PDF al día.", status_code=429)
+    if used >= FREE_MONTHLY_LIMIT:
+        return HTMLResponse("❌ Límite gratis: 5 PDFs al mes.", status_code=429)
 
+    # Leer contenido (FREE max MB)
     data_in = await file.read()
     if len(data_in) > FREE_MAX_MB * 1024 * 1024:
         return HTMLResponse(f"❌ Límite gratis: máximo {FREE_MAX_MB} MB por PDF.", status_code=413)
@@ -379,17 +554,16 @@ async def process(
 
             data_out = final_path.read_bytes()
 
-        except FileNotFoundError as e:
-            # Típico si Ghostscript no está instalado en el servidor
+        except FileNotFoundError:
             return HTMLResponse(
-                "❌ Error: Ghostscript no está disponible en el servidor.\n"
-                "Solución: instalar ghostscript en el deploy (Render/Railway) o usar un buildpack.",
+                "❌ Error: Ghostscript no está disponible en el servidor.",
                 status_code=500,
             )
         except Exception as e:
             return HTMLResponse(f"❌ Error procesando el PDF:\n\n{e}", status_code=500)
 
-    DAILY_COUNTER[key] = used + 1
+    # Cuenta uso al final si todo salió bien
+    MONTHLY_COUNTER[key] = used + 1
 
     return Response(
         content=data_out,
