@@ -9,12 +9,197 @@ from clean_pdf import clean_pdf, compress_with_ghostscript
 
 app = FastAPI(title="PDF Cleaner & Compressor")
 
-HTML = """
+
+LANDING_HTML = """
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8"/>
+  <title>PDF Cleaner - PDFs listos para enviar</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial;
+      background: #f7f8fa;
+      margin: 0;
+      padding: 0;
+      color: #111;
+    }
+    .container {
+      max-width: 900px;
+      margin: 70px auto;
+      background: #fff;
+      padding: 44px;
+      border-radius: 16px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.08);
+    }
+    .hero {
+      display: grid;
+      grid-template-columns: 1.2fr 0.8fr;
+      gap: 24px;
+      align-items: center;
+    }
+    h1 { margin: 0 0 10px 0; font-size: 34px; line-height: 1.1; }
+    .subtitle { margin: 0 0 18px 0; color: #555; font-size: 15px; line-height: 1.5; }
+    .ctaRow { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 18px; }
+    .btn {
+      display: inline-block;
+      padding: 12px 16px;
+      border-radius: 12px;
+      border: 1px solid #ddd;
+      text-decoration: none;
+      font-weight: 600;
+      font-size: 14px;
+    }
+    .btnPrimary { background:#111; color:#fff; border-color:#111; }
+    .btnPrimary:hover { background:#000; }
+    .btnGhost { background:#fff; color:#111; }
+    .card {
+      background: #f7f8fa;
+      border: 1px solid #ececec;
+      border-radius: 14px;
+      padding: 16px;
+    }
+    .grid3 {
+      margin-top: 28px;
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 14px;
+    }
+    .grid2 {
+      margin-top: 18px;
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 14px;
+    }
+    .tag { display:inline-block; font-size: 12px; padding: 6px 10px; border-radius: 999px; background:#111; color:#fff; margin-bottom: 10px; }
+    ul { margin: 10px 0 0 18px; color:#444; }
+    .muted { color:#666; font-size: 13px; line-height: 1.5; }
+    .pricing { margin-top: 30px; display:grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+    .price { font-size: 28px; font-weight: 800; margin: 8px 0; }
+    .small { font-size: 12px; color:#666; }
+    .footer { margin-top: 28px; text-align:center; color:#777; font-size: 12px; }
+    code { background:#f1f2f4; padding:2px 6px; border-radius:8px; }
+    @media (max-width: 900px) {
+      .container { margin: 20px; padding: 22px; }
+      .hero { grid-template-columns: 1fr; }
+      .grid3, .grid2, .pricing { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="hero">
+      <div>
+        <span class="tag">B2B</span>
+        <h1>PDFs listos para enviar, subir y archivar</h1>
+        <p class="subtitle">
+          Limpia y comprime PDFs profesionales en segundos.
+          Hecho para <b>asesorías</b>, <b>inmobiliarias</b>, <b>arquitectos</b> e <b>ingenieros</b>.
+        </p>
+
+        <div class="ctaRow">
+          <a class="btn btnPrimary" href="/app">Limpiar 1 PDF gratis</a>
+          <a class="btn btnGhost" href="#precios">Ver planes</a>
+        </div>
+
+        <p class="muted">
+          Gratis: 1 PDF al día · Para uso frecuente, plan Pro.
+        </p>
+      </div>
+
+      <div class="card">
+        <b>Casos típicos</b>
+        <ul>
+          <li>PDF demasiado pesado para enviar por email</li>
+          <li>Documento rechazado por plataformas</li>
+          <li>Escaneos mal optimizados</li>
+          <li>Archivos lentos y poco “pro”</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="grid3">
+      <div class="card"><b>Asesorías / Gestorías</b><div class="muted">Modelos, facturas, trámites.</div></div>
+      <div class="card"><b>Inmobiliarias</b><div class="muted">Contratos, documentación cliente.</div></div>
+      <div class="card"><b>Técnicos</b><div class="muted">Planos, memorias, informes.</div></div>
+    </div>
+
+    <div class="grid2">
+      <div class="card">
+        <b>Qué hace</b>
+        <ul>
+          <li>Elimina páginas en blanco</li>
+          <li>Reduce peso (Ghostscript)</li>
+          <li>Deja el archivo listo para uso profesional</li>
+        </ul>
+      </div>
+      <div class="card">
+        <b>Privacidad</b>
+        <ul>
+          <li>No guardamos tus archivos</li>
+          <li>Se procesan y se descargan</li>
+        </ul>
+      </div>
+    </div>
+
+    <h2 id="precios" style="margin-top:34px;">Precios</h2>
+    <div class="pricing">
+      <div class="card">
+        <b>Gratis</b>
+        <div class="price">0€</div>
+        <div class="small">1 PDF / día</div>
+        <ul>
+          <li>Uso ocasional</li>
+          <li>Ideal para probar</li>
+        </ul>
+        <div class="ctaRow"><a class="btn btnPrimary" href="/app">Probar</a></div>
+      </div>
+
+      <div class="card">
+        <b>Pro</b>
+        <div class="price">9€</div>
+        <div class="small">/ mes</div>
+        <ul>
+          <li>Hasta 50 PDFs / mes</li>
+          <li>PDFs más grandes</li>
+          <li>Uso comercial</li>
+        </ul>
+        <div class="ctaRow"><a class="btn btnGhost" href="/app">Empezar</a></div>
+        <div class="small">(Pagos: lo activamos después)</div>
+      </div>
+
+      <div class="card">
+        <b>Business</b>
+        <div class="price">15€</div>
+        <div class="small">/ mes</div>
+        <ul>
+          <li>Hasta 200 PDFs / mes</li>
+          <li>Ideal para asesorías</li>
+          <li>Prioridad</li>
+        </ul>
+        <div class="ctaRow"><a class="btn btnGhost" href="/app">Empezar</a></div>
+        <div class="small">(Pagos: lo activamos después)</div>
+      </div>
+    </div>
+
+    <div class="footer">
+      PDF Cleaner · Hecho para profesionales · Tus archivos no se guardan
+    </div>
+  </div>
+</body>
+</html>
+"""
+
+
+APP_HTML = """
 <!doctype html>
 <html lang="es">
 <head>
   <meta charset="utf-8"/>
   <title>PDF Cleaner</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <style>
     * { box-sizing: border-box; }
     body {
@@ -25,12 +210,14 @@ HTML = """
     }
     .container {
       max-width: 520px;
-      margin: 80px auto;
+      margin: 70px auto;
       background: #fff;
       padding: 32px;
       border-radius: 14px;
       box-shadow: 0 10px 30px rgba(0,0,0,0.08);
     }
+    .toplink { display:block; margin-bottom: 14px; font-size: 13px; color:#444; text-decoration:none; }
+    .toplink:hover { text-decoration: underline; }
     h1 { text-align: center; margin-bottom: 8px; }
     p.subtitle { text-align: center; color: #666; margin-bottom: 22px; font-size: 14px; }
 
@@ -95,6 +282,8 @@ HTML = """
 </head>
 <body>
   <div class="container">
+    <a class="toplink" href="/">← Volver a la landing</a>
+
     <h1>PDF Cleaner</h1>
     <p class="subtitle">Limpia y comprime PDFs en segundos</p>
 
@@ -213,8 +402,13 @@ HTML = """
 
 
 @app.get("/", response_class=HTMLResponse)
-def home():
-    return HTML
+def landing():
+    return LANDING_HTML
+
+
+@app.get("/app", response_class=HTMLResponse)
+def app_page():
+    return APP_HTML
 
 
 @app.post("/process")
