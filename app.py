@@ -1,24 +1,22 @@
 import uuid
 import tempfile
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import date
 
 from fastapi import FastAPI, UploadFile, File, Form, Request
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, Response, PlainTextResponse
 
 from clean_pdf import clean_pdf, compress_with_ghostscript
 
 app = FastAPI(title="PDF Cleaner & Compressor")
 
-# =========================
-# LIMITES FREE (MVP)
-# =========================
-MAX_FREE_MB = 5
-MAX_FREE_BYTES = MAX_FREE_MB * 1024 * 1024
+# --- LÍMITE FREE (demo) ---
+FREE_MAX_MB = 5
+FREE_DAILY_LIMIT = 1  # 1 PDF al día (por IP)
+DAILY_COUNTER = {}  # key=(ip, YYYY-MM-DD) -> count
 
-# 1 PDF/día por IP (simple, MVP)
-# Nota: en Render Free el servicio puede "dormirse" y reiniciarse -> esta memoria se puede resetear.
-DAILY_USAGE_BY_IP = {}  # { "ip": "YYYY-MM-DD" }
+# Sube esto cada deploy para ver si realmente se actualiza en producción
+APP_VERSION = "2025-12-24-v3"
 
 
 APP_HTML = r"""
@@ -27,7 +25,7 @@ APP_HTML = r"""
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>PDF Cleaner — PDFs listos para enviar, subir y archivar</title>
+  <title>PDF Cleaner — comprime y limpia en segundos</title>
   <style>
     :root{
       --bg:#f7f8fa; --card:#ffffff; --text:#0f172a; --muted:#475569;
@@ -42,11 +40,11 @@ APP_HTML = r"""
       font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial;
     }
     a{ color:inherit; text-decoration:none; }
-    .wrap{ max-width:1080px; margin:0 auto; padding:28px 18px 80px; }
+    .wrap{ max-width:980px; margin:0 auto; padding:22px 16px 70px; }
 
     .topbar{
       display:flex; align-items:center; justify-content:space-between;
-      gap:14px; margin-bottom:18px;
+      gap:14px; margin-bottom:14px;
     }
     .brand{ display:flex; align-items:center; gap:10px; font-weight:800; letter-spacing:-0.2px; }
     .badge{
@@ -57,78 +55,26 @@ APP_HTML = r"""
 
     .hero{
       background:var(--card); border:1px solid var(--line); border-radius:18px;
-      padding:26px; box-shadow:var(--shadow);
-      display:grid; grid-template-columns: 1.2fr 0.8fr; gap:22px;
-    }
-    @media(max-width:880px){ .hero{ grid-template-columns:1fr; } }
-    h1{ margin:10px 0 10px; font-size:44px; line-height:1.05; letter-spacing:-1px; }
-    @media(max-width:520px){ h1{ font-size:34px; } }
-    .sub{ color:var(--muted); font-size:15px; line-height:1.45; margin:0 0 18px; }
-    .ctaRow{ display:flex; gap:12px; flex-wrap:wrap; }
-    .btn{
-      border-radius:12px; padding:12px 16px; border:1px solid #111;
-      font-weight:700; font-size:14px; cursor:pointer; display:inline-flex; align-items:center; gap:8px;
-    }
-    .btn.primary{ background:var(--btn); color:#fff; }
-    .btn.secondary{ background:var(--btn2); color:#111; }
-    .btn:hover{ transform: translateY(-1px); }
-    .note{ margin-top:10px; font-size:12px; color:var(--muted); }
-
-    .box{
-      border:1px solid var(--line); border-radius:16px; padding:16px;
-      background:#fafafa;
-    }
-    .box h3{ margin:0 0 10px; font-size:16px; }
-    .box ul{ margin:0; padding-left:18px; color:var(--muted); }
-    .box li{ margin:6px 0; }
-
-    .trustRow{
-      margin-top:18px;
-      display:grid; grid-template-columns: repeat(3, 1fr); gap:12px;
-    }
-    @media(max-width:880px){ .trustRow{ grid-template-columns:1fr; } }
-    .trust{
-      background:#fff; border:1px solid var(--line); border-radius:16px;
-      padding:14px 14px; box-shadow:0 8px 22px rgba(0,0,0,0.05);
-    }
-    .trust b{ display:block; margin-bottom:6px; }
-    .trust span{ color:var(--muted); font-size:13px; line-height:1.35; }
-
-    .segments{
-      margin-top:18px;
-      display:grid; grid-template-columns: repeat(3, 1fr); gap:12px;
-    }
-    @media(max-width:880px){ .segments{ grid-template-columns:1fr; } }
-    .seg{
-      border:1px solid var(--line); border-radius:16px; padding:14px; background:#fff;
-    }
-    .seg b{ display:block; margin-bottom:4px; }
-    .seg span{ color:var(--muted); font-size:13px; }
-
-    .tool{
-      margin-top:18px;
-      background:#fff; border:1px solid var(--line); border-radius:18px;
       padding:22px; box-shadow:var(--shadow);
     }
-    .toolHead{
-      display:flex; justify-content:space-between; align-items:flex-end; gap:12px; flex-wrap:wrap;
-      margin-bottom:12px;
-    }
-    .toolHead h2{ margin:0; font-size:22px; letter-spacing:-0.2px; }
-    .toolHead p{ margin:0; color:var(--muted); font-size:13px; }
+    h1{ margin:0 0 8px; font-size:38px; line-height:1.08; letter-spacing:-0.8px; }
+    @media(max-width:520px){ h1{ font-size:30px; } }
+    .sub{ color:var(--muted); font-size:14px; line-height:1.45; margin:0 0 12px; }
 
-    label{ font-weight:800; display:block; margin-top:14px; font-size:13px; }
+    .tool{
+      margin-top:14px;
+      background:#fff; border:1px solid var(--line); border-radius:18px;
+      padding:18px; box-shadow:var(--shadow);
+    }
+    label{ font-weight:700; display:block; margin-top:12px; font-size:13px; }
     input, select{
       width:100%; margin-top:6px; padding:12px;
       border-radius:10px; border:1px solid #d6d6d6; font-size:14px;
       background:#fff;
     }
-    .row{ display:grid; grid-template-columns: 1fr 1fr; gap:12px; }
-    @media(max-width:700px){ .row{ grid-template-columns:1fr; } }
-
     .submit{
-      width:100%; margin-top:16px; padding:14px; border-radius:12px;
-      border:none; background:#111; color:#fff; font-size:15px; font-weight:900;
+      width:100%; margin-top:14px; padding:14px; border-radius:12px;
+      border:none; background:#111; color:#fff; font-size:15px; font-weight:800;
       cursor:pointer;
     }
     .submit:hover{ background:#000; }
@@ -157,30 +103,14 @@ APP_HTML = r"""
     }
     .result b{ color:#111; }
 
-    .explain{
+    .microinfo{
       margin-top:8px;
-      padding:10px 12px;
-      border:1px dashed #d6d6d6;
-      border-radius:12px;
-      color:var(--muted);
-      font-size:12px;
-      line-height:1.4;
-      background:#fafafa;
+      font-size:12px; color:var(--muted);
+      border-left:3px solid #111;
+      padding-left:10px;
+      line-height:1.35;
     }
-
-    .pricing{ margin-top:18px; display:grid; grid-template-columns: repeat(3, 1fr); gap:12px; }
-    @media(max-width:880px){ .pricing{ grid-template-columns:1fr; } }
-    .plan{
-      background:#fff; border:1px solid var(--line); border-radius:18px;
-      padding:16px; box-shadow:0 8px 22px rgba(0,0,0,0.05);
-    }
-    .plan h3{ margin:0 0 6px; }
-    .price{ font-size:26px; font-weight:900; margin:6px 0 10px; letter-spacing:-0.5px; }
-    .plan ul{ margin:0; padding-left:18px; color:var(--muted); font-size:13px; }
-    .plan li{ margin:6px 0; }
-    .fine{ margin-top:10px; font-size:12px; color:var(--muted); }
-
-    .footer{ margin-top:24px; color:var(--muted); font-size:12px; text-align:center; }
+    .footer{ margin-top:18px; color:var(--muted); font-size:12px; text-align:center; }
   </style>
 </head>
 
@@ -193,95 +123,28 @@ APP_HTML = r"""
       </div>
       <div class="nav">
         <a href="#herramienta">Herramienta</a>
-        <a href="#precios">Precios</a>
-        <a href="#privacidad">Privacidad</a>
       </div>
     </div>
 
     <section class="hero">
-      <div>
-        <h1>PDFs listos para enviar, subir y archivar</h1>
-        <p class="sub">
-          Limpia y comprime PDFs profesionales en segundos. Hecho para <b>asesorías</b>, <b>inmobiliarias</b>,
-          <b>arquitectos</b> e <b>ingenierías</b> que trabajan con documentos pesados o mal escaneados.
-        </p>
-
-        <div class="ctaRow">
-          <a class="btn primary" href="#herramienta">✅ Limpiar 1 PDF gratis</a>
-          <a class="btn secondary" href="#precios">Ver planes</a>
-        </div>
-
-        <div class="note">
-          Gratis: <b>1 PDF al día</b> (máx. <b>5MB</b>). Sin instalaciones. Procesas y descargas al momento.
-        </div>
-
-        <div class="trustRow" id="privacidad">
-          <div class="trust">
-            <b>Privacidad real</b>
-            <span>No guardamos tus PDFs. Se procesan y se eliminan al terminar.</span>
-          </div>
-          <div class="trust">
-            <b>Hecho para empresa</b>
-            <span>Ideal para email, CRM, portales y plataformas que rechazan PDFs pesados.</span>
-          </div>
-          <div class="trust">
-            <b>Resultado visible</b>
-            <span>Mostramos la reducción de peso al finalizar (antes → después).</span>
-          </div>
-        </div>
-      </div>
-
-      <div class="box">
-        <h3>Casos típicos</h3>
-        <ul>
-          <li>PDF demasiado pesado para enviar por email</li>
-          <li>Documento rechazado por plataformas/portales</li>
-          <li>Escaneos mal optimizados (lentitud, peso, páginas en blanco)</li>
-        </ul>
-      </div>
+      <h1>Comprime y limpia PDFs en segundos</h1>
+      <p class="sub">Ideal para enviar por email y subir a portales sin que te rechacen el archivo.</p>
+      <div class="hint"><b>Gratis:</b> 1 PDF/día · máx. 5 MB · sin registro</div>
     </section>
 
-    <div class="segments">
-      <div class="seg"><b>Asesorías / Gestorías</b><span>Modelos, facturas, trámites.</span></div>
-      <div class="seg"><b>Inmobiliarias</b><span>Contratos, documentación cliente.</span></div>
-      <div class="seg"><b>Técnicos</b><span>Planos, memorias, informes.</span></div>
-    </div>
-
     <section id="herramienta" class="tool">
-      <div class="toolHead">
-        <div>
-          <h2>Procesar PDF</h2>
-          <p>Sube tu archivo → limpiamos → comprimimos → descargas al momento.</p>
-        </div>
-        <div style="color:#475569; font-size:12px;">
-          Tip: “Máxima compresión” suele dar el mejor resultado en PDFs escaneados.
-        </div>
-      </div>
-
       <form id="pdfForm" enctype="multipart/form-data">
         <label>Archivo PDF</label>
         <input id="file" type="file" name="file" accept="application/pdf" required>
         <div id="fileName" class="hint">Ningún archivo seleccionado</div>
 
-        <div class="row">
-          <div>
-            <label>Acción</label>
-            <select id="compress" name="compress">
-              <option value="yes">Limpiar + comprimir</option>
-              <option value="no">Solo limpiar</option>
-            </select>
-          </div>
-
-          <div>
-            <label>Calidad</label>
-            <select id="quality" name="quality">
-              <option value="screen">Máxima compresión</option>
-              <option value="ebook">Equilibrado</option>
-              <option value="printer">Alta calidad</option>
-            </select>
-            <div id="qualityHelp" class="explain"></div>
-          </div>
-        </div>
+        <label>Calidad</label>
+        <select id="quality" name="quality">
+          <option value="screen" selected>Máxima compresión</option>
+          <option value="ebook">Equilibrado</option>
+          <option value="printer">Alta calidad</option>
+        </select>
+        <div id="qualityHelp" class="microinfo"></div>
 
         <button id="submitBtn" class="submit" type="submit">Procesar PDF</button>
 
@@ -289,51 +152,14 @@ APP_HTML = r"""
         <div id="errBox" class="error"></div>
 
         <div class="hint">
-          <b>Gratis:</b> 1 PDF/día (máx. 5MB).<br/>
-          <b>Privacidad:</b> no se guardan archivos. Se procesan en un directorio temporal y se eliminan.<br/>
-          Si procesas el mismo PDF varias veces, tu navegador puede guardarlo como (1), (2) en Descargas.
+          Procesamos el archivo temporalmente y se elimina al terminar.
+          <br/>Versión: <span id="ver"></span>
         </div>
       </form>
     </section>
 
-    <section id="precios" class="pricing">
-      <div class="plan">
-        <h3>Gratis</h3>
-        <div class="price">0€</div>
-        <ul>
-          <li>1 PDF al día</li>
-          <li>Máximo 5MB por archivo</li>
-          <li>Limpieza + compresión</li>
-          <li>Sin registro (por ahora)</li>
-        </ul>
-        <div class="fine">Perfecto para probar con documentos reales.</div>
-      </div>
-
-      <div class="plan">
-        <h3>Pro</h3>
-        <div class="price">9€/mes</div>
-        <ul>
-          <li>Uso ilimitado (equipos pequeños)</li>
-          <li>Prioridad de procesamiento</li>
-          <li>Soporte por email</li>
-        </ul>
-        <div class="fine">Para asesorías, inmobiliarias y despachos con volumen.</div>
-      </div>
-
-      <div class="plan">
-        <h3>Empresa</h3>
-        <div class="price">A medida</div>
-        <ul>
-          <li>Límites más altos</li>
-          <li>Acuerdos por volumen</li>
-          <li>Integración (email / bandeja de entrada) en el futuro</li>
-        </ul>
-        <div class="fine">Si procesas PDFs cada día, hablamos.</div>
-      </div>
-    </section>
-
     <div class="footer">
-      PDF Cleaner — pensado para uso profesional. Si no baja mucho el peso, es que el PDF ya venía optimizado.
+      Si un PDF no reduce mucho, puede que ya esté optimizado.
     </div>
   </div>
 
@@ -344,17 +170,21 @@ APP_HTML = r"""
     const btn = document.getElementById("submitBtn");
     const errBox = document.getElementById("errBox");
     const resultBox = document.getElementById("resultBox");
+
     const qualitySel = document.getElementById("quality");
     const qualityHelp = document.getElementById("qualityHelp");
 
-    const MAX_FREE_MB = 5;
-    const MAX_FREE_BYTES = MAX_FREE_MB * 1024 * 1024;
-
-    const QUALITY_DESC = {
-      "screen": "Reduce el peso al máximo manteniendo el PDF legible. Ideal para enviar por email y subir a plataformas.",
-      "ebook": "Compresión moderada. Buena opción si quieres balance entre tamaño y calidad visual.",
-      "printer": "Prioriza calidad (impresión/planos). Reduce menos el peso."
+    const helpText = {
+      "screen": "<b>Máxima compresión:</b> reduce el peso al máximo manteniendo el PDF legible.",
+      "ebook": "<b>Equilibrado:</b> buena reducción sin castigar demasiado la calidad.",
+      "printer": "<b>Alta calidad:</b> menor reducción; pensado para impresión."
     };
+
+    function setQualityHelp() {
+      qualityHelp.innerHTML = helpText[qualitySel.value] || "";
+    }
+    setQualityHelp();
+    qualitySel.addEventListener("change", setQualityHelp);
 
     function setLoading(isLoading) {
       if (isLoading) {
@@ -390,21 +220,21 @@ APP_HTML = r"""
       return (n / (1024 * 1024)).toFixed(2) + " MB";
     }
 
-    function updateQualityHelp() {
-      const v = qualitySel.value;
-      qualityHelp.textContent = QUALITY_DESC[v] || "";
-    }
-
-    // Default: Máxima compresión
-    qualitySel.value = "screen";
-    updateQualityHelp();
-    qualitySel.addEventListener("change", updateQualityHelp);
-
     fileInput.addEventListener("change", () => {
       fileName.textContent = fileInput.files?.[0]?.name || "Ningún archivo seleccionado";
       clearError();
       clearResult();
     });
+
+    async function loadVersion(){
+      try{
+        const r = await fetch("/version", {cache:"no-store"});
+        document.getElementById("ver").textContent = await r.text();
+      }catch(e){
+        document.getElementById("ver").textContent = "unknown";
+      }
+    }
+    loadVersion();
 
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
@@ -417,9 +247,9 @@ APP_HTML = r"""
         return;
       }
 
-      // Límite FREE en el navegador (para evitar subir de más)
-      if (f.size > MAX_FREE_BYTES) {
-        showError("❌ Límite gratis: máximo " + MAX_FREE_MB + "MB por PDF.");
+      const MAX_MB = 5;
+      if (f.size > MAX_MB * 1024 * 1024) {
+        showError("❌ Límite gratis: máximo " + MAX_MB + " MB por PDF.");
         return;
       }
 
@@ -428,7 +258,6 @@ APP_HTML = r"""
       try {
         const fd = new FormData();
         fd.append("file", f);
-        fd.append("compress", document.getElementById("compress").value);
         fd.append("quality", qualitySel.value);
 
         const res = await fetch("/process", { method: "POST", body: fd });
@@ -452,11 +281,10 @@ APP_HTML = r"""
           "(<b>" + pct.toFixed(1) + "%</b> menos)."
         );
 
-        // Descargar con el mismo nombre que el archivo original
         const url = window.URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = url;
-        a.download = f.name;
+        a.download = f.name; // mismo nombre
         document.body.appendChild(a);
         a.click();
         a.remove();
@@ -475,53 +303,59 @@ APP_HTML = r"""
 """
 
 
+def get_client_ip(request: Request) -> str:
+    xff = request.headers.get("x-forwarded-for")
+    if xff:
+        return xff.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def cleanup_old_counters():
+    today = date.today().isoformat()
+    if len(DAILY_COUNTER) > 5000:
+        to_delete = [k for k in DAILY_COUNTER.keys() if k[1] != today]
+        for k in to_delete:
+            DAILY_COUNTER.pop(k, None)
+
+
+@app.get("/version", response_class=PlainTextResponse)
+def version():
+    return APP_VERSION
+
+
 @app.get("/", response_class=HTMLResponse)
 def home():
     return APP_HTML
-
-
-def _today_utc_date_str() -> str:
-    return datetime.now(timezone.utc).date().isoformat()
-
-
-def _get_client_ip(request: Request) -> str:
-    # Render / proxies suelen enviar X-Forwarded-For
-    xff = request.headers.get("x-forwarded-for")
-    if xff:
-        # puede venir como "ip1, ip2, ip3"
-        return xff.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
 
 
 @app.post("/process")
 async def process(
     request: Request,
     file: UploadFile = File(...),
-    compress: str = Form("yes"),
-    quality: str = Form("screen"),  # default: máxima compresión
+    quality: str = Form("screen"),
 ):
-    # Validación básica
+    # Validación extensión
     if not (file.filename or "").lower().endswith(".pdf"):
         return HTMLResponse("❌ Solo se aceptan PDFs.", status_code=400)
 
-    # Limitar solo a las 3 opciones permitidas (seguridad)
-    if quality not in {"screen", "ebook", "printer"}:
-        return HTMLResponse("❌ Opción de calidad inválida.", status_code=400)
+    # Solo 3 opciones de calidad
+    allowed_qualities = {"screen", "ebook", "printer"}
+    if quality not in allowed_qualities:
+        quality = "screen"
 
-    if compress not in {"yes", "no"}:
-        return HTMLResponse("❌ Opción inválida.", status_code=400)
+    # Límite por IP y día
+    cleanup_old_counters()
+    ip = get_client_ip(request)
+    today = date.today().isoformat()
+    key = (ip, today)
+    used = DAILY_COUNTER.get(key, 0)
 
-    # Límite 1 PDF/día por IP (FREE)
-    ip = _get_client_ip(request)
-    today = _today_utc_date_str()
-    last_day = DAILY_USAGE_BY_IP.get(ip)
-    if last_day == today:
-        return HTMLResponse("❌ Límite gratis alcanzado: 1 PDF al día. Vuelve mañana.", status_code=429)
+    if used >= FREE_DAILY_LIMIT:
+        return HTMLResponse("❌ Límite gratis: 1 PDF al día.", status_code=429)
 
-    # Leer bytes y validar tamaño (máx 5MB)
     data_in = await file.read()
-    if len(data_in) > MAX_FREE_BYTES:
-        return HTMLResponse(f"❌ Límite gratis: máximo {MAX_FREE_MB}MB por PDF.", status_code=413)
+    if len(data_in) > FREE_MAX_MB * 1024 * 1024:
+        return HTMLResponse(f"❌ Límite gratis: máximo {FREE_MAX_MB} MB por PDF.", status_code=413)
 
     job_id = str(uuid.uuid4())
 
@@ -536,33 +370,33 @@ async def process(
         try:
             stats = clean_pdf(str(inp), str(cleaned))
 
-            if compress == "yes":
-                compress_with_ghostscript(str(cleaned), str(outp), quality)
-                final_path = outp
-            else:
-                final_path = cleaned
+            # Siempre: limpiar + comprimir
+            compress_with_ghostscript(str(cleaned), str(outp), quality)
+            final_path = outp
 
             if not final_path.exists():
                 return HTMLResponse("❌ No se generó el archivo final.", status_code=500)
 
             data_out = final_path.read_bytes()
 
+        except FileNotFoundError as e:
+            # Típico si Ghostscript no está instalado en el servidor
+            return HTMLResponse(
+                "❌ Error: Ghostscript no está disponible en el servidor.\n"
+                "Solución: instalar ghostscript en el deploy (Render/Railway) o usar un buildpack.",
+                status_code=500,
+            )
         except Exception as e:
             return HTMLResponse(f"❌ Error procesando el PDF:\n\n{e}", status_code=500)
 
-    # Marcar uso (solo si todo ha ido bien)
-    DAILY_USAGE_BY_IP[ip] = today
-
-    download_name = file.filename
+    DAILY_COUNTER[key] = used + 1
 
     return Response(
         content=data_out,
         media_type="application/pdf",
         headers={
-            "Content-Disposition": f'attachment; filename="{download_name}"',
+            "Content-Disposition": f'attachment; filename="{file.filename}"',
             "X-Total-Pages": str(stats.get("total", "")),
             "X-Removed-Pages": str(stats.get("removed", "")),
-            "X-Original-Bytes": str(len(data_in)),
-            "X-Final-Bytes": str(len(data_out)),
         },
     )
