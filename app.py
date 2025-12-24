@@ -13,7 +13,7 @@ app = FastAPI(title="PDF Cleaner & Compressor")
 # =========
 # VERSION
 # =========
-APP_VERSION = "2025-12-24-v4"
+APP_VERSION = "2025-12-24-v5"
 
 # =========
 # LIMITES (por IP)
@@ -27,14 +27,12 @@ PRO_MAX_MB = 15
 PRO_MONTHLY_LIMIT = 50
 
 # "Ilimitado" práctico para Business para que no reviente Render
-# (en Render Free si subes 200MB puede petar por RAM/tiempo)
-BUSINESS_MAX_MB = 60
+BUSINESS_MAX_MB = 60  # por ahora "práctico"; luego ajustamos con Stripe
 BUSINESS_MONTHLY_LIMIT = 200
 
 # Contador en memoria: key=(ip, YYYY-MM) -> count
 # Nota: in-memory se reinicia con redeploy / sleep. Para producción: Redis/DB.
 MONTHLY_COUNTER = {}
-
 
 # =========
 # HTML: LANDING (/)
@@ -45,22 +43,23 @@ LANDING_HTML = rf"""
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>PDF Cleaner — comprime y limpia PDFs en segundos</title>
+  <title>PDF Cleaner — PDFs listos en segundos</title>
   <style>
     :root{{
       --bg:#f7f8fa; --card:#fff; --text:#0f172a; --muted:#475569;
       --line:#e5e7eb; --shadow:0 10px 30px rgba(0,0,0,0.08);
       --btn:#111; --btn2:#fff;
+      --ok:#16a34a;
     }}
     *{{box-sizing:border-box}}
     body{{margin:0;background:var(--bg);color:var(--text);
       font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial}}
+    a{{color:inherit;text-decoration:none}}
     .wrap{{max-width:1080px;margin:0 auto;padding:28px 18px 70px}}
     .top{{display:flex;align-items:center;justify-content:space-between;gap:14px}}
     .brand{{display:flex;align-items:center;gap:10px;font-weight:900}}
     .badge{{font-size:12px;padding:6px 10px;border-radius:999px;background:#111;color:#fff}}
     .nav{{display:flex;gap:14px;font-size:13px;color:var(--muted)}}
-    a{{color:inherit;text-decoration:none}}
 
     .hero{{margin-top:18px;background:var(--card);border:1px solid var(--line);
       border-radius:18px;padding:26px;box-shadow:var(--shadow);
@@ -68,7 +67,8 @@ LANDING_HTML = rf"""
     @media(max-width:900px){{.hero{{grid-template-columns:1fr}}}}
     h1{{margin:0 0 10px;font-size:46px;line-height:1.05;letter-spacing:-1px}}
     @media(max-width:520px){{h1{{font-size:34px}}}}
-    .sub{{margin:0 0 18px;color:var(--muted);font-size:15px;line-height:1.5}}
+    .sub{{margin:0 0 10px;color:var(--muted);font-size:15px;line-height:1.5}}
+    .proline{{margin:0 0 18px;font-size:14px;color:#0f172a}}
     .ctaRow{{display:flex;gap:12px;flex-wrap:wrap}}
     .btn{{border-radius:12px;padding:12px 16px;border:1px solid #111;
       font-weight:800;font-size:14px;cursor:pointer;display:inline-flex;align-items:center;gap:8px}}
@@ -80,6 +80,7 @@ LANDING_HTML = rf"""
     .proof b{{display:block;margin-bottom:6px}}
     .proof ul{{margin:0;padding-left:18px;color:var(--muted);font-size:13px}}
     .proof li{{margin:6px 0}}
+    .check{{color:var(--ok);font-weight:900}}
 
     .pricing{{margin-top:18px;display:grid;grid-template-columns:repeat(3,1fr);gap:12px}}
     @media(max-width:900px){{.pricing{{grid-template-columns:1fr}}}}
@@ -91,6 +92,7 @@ LANDING_HTML = rf"""
     .plan li{{margin:6px 0}}
     .tag{{display:inline-block;font-size:12px;padding:4px 10px;border-radius:999px;border:1px solid var(--line);
       color:var(--muted);margin-top:8px}}
+    .planCta{{margin-top:12px}}
     .footer{{margin-top:22px;text-align:center;color:var(--muted);font-size:12px}}
   </style>
 </head>
@@ -111,10 +113,10 @@ LANDING_HTML = rf"""
           Limpia páginas en blanco y comprime tus PDFs para email y portales.
           Sin instalaciones. Resultado inmediato.
         </p>
+        <p class="proline"><span class="check">✓</span> <b>Herramienta profesional</b> pensada para uso real en empresa.</p>
 
         <div class="ctaRow">
-          <a class="btn primary" href="/app">✅ Probar gratis</a>
-          <a class="btn secondary" href="#precios">Ver planes</a>
+          <a class="btn primary" href="/app">✅ Probar ahora</a>
         </div>
 
         <div class="mini">
@@ -141,7 +143,10 @@ LANDING_HTML = rf"""
           <li>Máx. <b>{FREE_MAX_MB} MB</b> por PDF</li>
           <li>3 calidades (máxima por defecto)</li>
         </ul>
-        <div class="tag">Para probar rápido</div>
+        <div class="tag">Limitado para empresas → recomendado Pro</div>
+        <div class="planCta">
+          <a class="btn secondary" href="/app">Empezar</a>
+        </div>
       </div>
 
       <div class="plan">
@@ -152,21 +157,21 @@ LANDING_HTML = rf"""
           <li>Máx. <b>{PRO_MAX_MB} MB</b> por PDF</li>
           <li>Para uso frecuente</li>
         </ul>
-        <div class="ctaRow" style="margin-top:12px;">
+        <div class="planCta">
           <a class="btn primary" href="/app">Empezar</a>
         </div>
       </div>
 
       <div class="plan">
         <h3>Business</h3>
-        <div class="price">A medida</div>
+        <div class="price">15€ / mes</div>
         <ul>
           <li>Hasta <b>{BUSINESS_MONTHLY_LIMIT} PDFs/mes</b></li>
           <li><b>MB “ilimitados”</b> (práctico)</li>
           <li>Prioridad alta</li>
         </ul>
-        <div class="ctaRow" style="margin-top:12px;">
-          <a class="btn secondary" href="/app">Contactar</a>
+        <div class="planCta">
+          <a class="btn primary" href="/app">Empezar</a>
         </div>
       </div>
     </section>
@@ -177,7 +182,6 @@ LANDING_HTML = rf"""
 </html>
 """
 
-
 # =========
 # HTML: APP (/app)
 # =========
@@ -187,7 +191,7 @@ APP_HTML = r"""
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>PDF Cleaner — herramienta</title>
+  <title>PDF Cleaner — Limpiador profesional</title>
   <style>
     :root{
       --bg:#f7f8fa; --card:#ffffff; --text:#0f172a; --muted:#475569;
@@ -288,7 +292,7 @@ APP_HTML = r"""
     </div>
 
     <section class="hero">
-      <h1>Herramienta</h1>
+      <h1>Limpiador profesional</h1>
       <p class="sub">Sube tu PDF → lo limpiamos y comprimimos → descargas al momento.</p>
       <div class="hint"><b>Gratis:</b> 5 PDFs/mes · máx. 5 MB · sin registro</div>
     </section>
@@ -446,7 +450,7 @@ APP_HTML = r"""
         const url = window.URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = url;
-        a.download = f.name; // mismo nombre
+        a.download = f.name;
         document.body.appendChild(a);
         a.click();
         a.remove();
@@ -464,7 +468,9 @@ APP_HTML = r"""
 </html>
 """
 
-
+# =========
+# UTILS
+# =========
 def get_client_ip(request: Request) -> str:
     xff = request.headers.get("x-forwarded-for")
     if xff:
@@ -479,7 +485,6 @@ def current_month_key(request: Request) -> tuple[str, str]:
 
 
 def cleanup_old_counters():
-    # Si crece demasiado, borramos meses antiguos
     current_month = date.today().strftime("%Y-%m")
     if len(MONTHLY_COUNTER) > 5000:
         to_delete = [k for k in MONTHLY_COUNTER.keys() if k[1] != current_month]
@@ -487,18 +492,19 @@ def cleanup_old_counters():
             MONTHLY_COUNTER.pop(k, None)
 
 
+# =========
+# ROUTES
+# =========
 @app.get("/version", response_class=PlainTextResponse)
 def version():
     return APP_VERSION
 
 
-# Landing
 @app.get("/", response_class=HTMLResponse)
 def landing():
     return LANDING_HTML
 
 
-# App
 @app.get("/app", response_class=HTMLResponse)
 def app_page():
     return APP_HTML
