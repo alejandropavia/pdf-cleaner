@@ -6,12 +6,7 @@ from pathlib import Path
 from datetime import date
 
 from fastapi import FastAPI, UploadFile, File, Form, Request
-from fastapi.responses import (
-    HTMLResponse,
-    Response,
-    PlainTextResponse,
-    RedirectResponse,
-)
+from fastapi.responses import HTMLResponse, Response, PlainTextResponse, RedirectResponse
 
 import stripe
 
@@ -24,14 +19,14 @@ app = FastAPI(title="PDF Cleaner & Compressor")
 # =========
 # VERSION
 # =========
-APP_VERSION = "2025-12-26-v11-stable"
+APP_VERSION = "2025-12-26-v12-business-100mb"
 
 # =========
 # STRIPE
 # =========
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
-STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
-PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "")
+STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")  # opcional
+PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "")  # ej: https://xxxxx.onrender.com
 STRIPE_PRICE_PRO = os.getenv("STRIPE_PRICE_PRO", "")
 STRIPE_PRICE_BUSINESS = os.getenv("STRIPE_PRICE_BUSINESS", "")
 
@@ -47,29 +42,36 @@ FREE_MONTHLY_LIMIT = 5
 PRO_MAX_MB = 15
 PRO_MONTHLY_LIMIT = 50
 
-BUSINESS_MAX_MB = 60
+BUSINESS_MAX_MB = 100   # ✅ SUBIDO A 100
 BUSINESS_MONTHLY_LIMIT = 200
 
 # =========
-# PATHS
+# FILES
 # =========
 BASE_DIR = Path(__file__).resolve().parent
 TEMPLATE_DIR = BASE_DIR / "templates"
 
 
 @app.on_event("startup")
-def startup():
+def _startup():
     init_db()
 
 
 # =========
-# HTML HELPERS
+# HTML RENDER (replace seguro)
 # =========
 def _read_template(name: str) -> str:
-    return (TEMPLATE_DIR / name).read_text(encoding="utf-8")
+    p = TEMPLATE_DIR / name
+    return p.read_text(encoding="utf-8")
 
 
 def _apply_vars(html: str) -> str:
+    """
+    Sustituye placeholders de negocio en DOS formatos:
+      {FREE_MAX_MB}
+      %%FREE_MAX_MB%%
+    y NO toca llaves del CSS.
+    """
     values = {
         "FREE_MONTHLY_LIMIT": str(FREE_MONTHLY_LIMIT),
         "FREE_MAX_MB": str(FREE_MAX_MB),
@@ -77,11 +79,12 @@ def _apply_vars(html: str) -> str:
         "PRO_MAX_MB": str(PRO_MAX_MB),
         "BUSINESS_MONTHLY_LIMIT": str(BUSINESS_MONTHLY_LIMIT),
         "BUSINESS_MAX_MB": str(BUSINESS_MAX_MB),
-        "APP_VERSION": APP_VERSION,
+        "APP_VERSION": str(APP_VERSION),
     }
-    for k, v in values.items():
-        html = html.replace(f"{{{k}}}", v)
-        html = html.replace(f"%%{k}%%", v)
+
+    for key, val in values.items():
+        html = html.replace(f"{{{key}}}", val)   # {KEY}
+        html = html.replace(f"%%{key}%%", val)   # %%KEY%%
     return html
 
 
@@ -90,8 +93,14 @@ def render_landing_html() -> str:
 
 
 def render_app_html(token: str = "") -> str:
+    """
+    Renderiza app.html y, si hay token, lo inyecta para que el formulario pueda enviarlo.
+    En app.html puedes usar %%TOKEN%% o {TOKEN}.
+    """
     html = _apply_vars(_read_template("app.html"))
-    return html.replace("%%TOKEN%%", token).replace("{TOKEN}", token)
+    token = token or ""
+    html = html.replace("%%TOKEN%%", token).replace("{TOKEN}", token)
+    return html
 
 
 # =========
@@ -109,12 +118,17 @@ def month_str() -> str:
 
 
 def plan_limits_for_token(token: str):
+    """
+    Devuelve (max_mb, monthly_limit, plan_name) según token en DB.
+    Si no hay token válido -> Free.
+    """
     if token:
         row = get_token(token)
         if row:
-            if row["plan"] == "pro":
+            plan = row["plan"]
+            if plan == "pro":
                 return PRO_MAX_MB, PRO_MONTHLY_LIMIT, "pro"
-            if row["plan"] == "business":
+            if plan == "business":
                 return BUSINESS_MAX_MB, BUSINESS_MONTHLY_LIMIT, "business"
     return FREE_MAX_MB, FREE_MONTHLY_LIMIT, "free"
 
@@ -125,7 +139,7 @@ def create_access_token(plan: str, email: str = "") -> str:
     return t
 
 
-def stripe_ready():
+def _ensure_stripe_ready():
     if not STRIPE_SECRET_KEY:
         return "STRIPE_SECRET_KEY"
     if not PUBLIC_BASE_URL:
@@ -146,70 +160,115 @@ def landing():
     return render_landing_html()
 
 
-@app.get("/app", response_class=HTMLResponse)
-def app_page(token: str = ""):
-    return render_app_html(token)
-
-
 @app.get("/free")
 def go_free():
-    return RedirectResponse("/app", status_code=303)
+    return RedirectResponse(url="/app", status_code=303)
 
 
 @app.get("/try")
 def go_try():
-    return RedirectResponse("/app", status_code=303)
+    return RedirectResponse(url="/app", status_code=303)
+
+
+@app.get("/app", response_class=HTMLResponse)
+def app_page(token: str = ""):
+    return HTMLResponse(render_app_html(token=token))
 
 
 # =========
-# STRIPE
+# STRIPE CHECKOUT
 # =========
 @app.get("/checkout/pro")
-def checkout_pro():
-    missing = stripe_ready()
+def checkout_pro(request: Request):
+    missing = _ensure_stripe_ready()
     if missing or not STRIPE_PRICE_PRO:
-        return HTMLResponse(f"❌ Stripe mal configurado: {missing}", 500)
+        return HTMLResponse(
+            f"❌ Stripe no está configurado. Revisa {missing or 'STRIPE_PRICE_PRO'}.",
+            status_code=500,
+        )
+
+    success_url = f"{PUBLIC_BASE_URL}/success?session_id={{CHECKOUT_SESSION_ID}}"
+    cancel_url = f"{PUBLIC_BASE_URL}/#precios"
 
     session = stripe.checkout.Session.create(
         mode="subscription",
         line_items=[{"price": STRIPE_PRICE_PRO, "quantity": 1}],
-        success_url=f"{PUBLIC_BASE_URL}/success?session_id={{CHECKOUT_SESSION_ID}}",
-        cancel_url=f"{PUBLIC_BASE_URL}/#precios",
+        success_url=success_url,
+        cancel_url=cancel_url,
     )
     return RedirectResponse(session.url, status_code=303)
 
 
 @app.get("/checkout/business")
-def checkout_business():
-    missing = stripe_ready()
+def checkout_business(request: Request):
+    missing = _ensure_stripe_ready()
     if missing or not STRIPE_PRICE_BUSINESS:
-        return HTMLResponse(f"❌ Stripe mal configurado: {missing}", 500)
+        return HTMLResponse(
+            f"❌ Stripe no está configurado. Revisa {missing or 'STRIPE_PRICE_BUSINESS'}.",
+            status_code=500,
+        )
+
+    success_url = f"{PUBLIC_BASE_URL}/success?session_id={{CHECKOUT_SESSION_ID}}"
+    cancel_url = f"{PUBLIC_BASE_URL}/#precios"
 
     session = stripe.checkout.Session.create(
         mode="subscription",
         line_items=[{"price": STRIPE_PRICE_BUSINESS, "quantity": 1}],
-        success_url=f"{PUBLIC_BASE_URL}/success?session_id={{CHECKOUT_SESSION_ID}}",
-        cancel_url=f"{PUBLIC_BASE_URL}/#precios",
+        success_url=success_url,
+        cancel_url=cancel_url,
     )
     return RedirectResponse(session.url, status_code=303)
 
 
 @app.get("/success")
 def success(session_id: str = ""):
+    """
+    Verifica la sesión, detecta el plan y crea un token PERSISTENTE en SQLite.
+    Luego redirige a /app?token=...
+    """
     if not (STRIPE_SECRET_KEY and session_id):
-        return HTMLResponse("Pago recibido.")
+        return HTMLResponse("✅ Pago recibido. (No se pudo verificar session_id.)")
 
-    sess = stripe.checkout.Session.retrieve(session_id, expand=["line_items"])
-    items = sess["line_items"]["data"]
+    try:
+        sess = stripe.checkout.Session.retrieve(session_id, expand=["line_items"])
 
-    plan = "pro"
-    if items and items[0]["price"]["id"] == STRIPE_PRICE_BUSINESS:
-        plan = "business"
+        plan = "pro"
+        try:
+            items = sess["line_items"]["data"]
+            if items and items[0]["price"]["id"] == STRIPE_PRICE_BUSINESS:
+                plan = "business"
+            elif items and items[0]["price"]["id"] == STRIPE_PRICE_PRO:
+                plan = "pro"
+        except Exception:
+            pass
 
-    email = (sess.get("customer_details") or {}).get("email") or ""
-    token = create_access_token(plan, email)
+        email = (sess.get("customer_details") or {}).get("email") or ""
+        token = create_access_token(plan=plan, email=email)
 
-    return RedirectResponse(f"/app?token={token}", status_code=303)
+        return RedirectResponse(url=f"/app?token={token}", status_code=303)
+
+    except Exception as e:
+        return HTMLResponse(f"✅ Pago recibido, pero error verificando Stripe:\n\n{e}")
+
+
+@app.post("/stripe/webhook")
+async def stripe_webhook(request: Request):
+    """
+    Opcional para futuro (cancelaciones/renovaciones).
+    Para el MVP no dependemos de esto.
+    """
+    if not (STRIPE_WEBHOOK_SECRET and STRIPE_SECRET_KEY):
+        return Response(status_code=200)
+
+    payload = await request.body()
+    sig = request.headers.get("stripe-signature", "")
+
+    try:
+        _ = stripe.Webhook.construct_event(payload, sig, STRIPE_WEBHOOK_SECRET)
+    except Exception:
+        return Response(status_code=400)
+
+    return Response(status_code=200)
 
 
 # =========
@@ -222,51 +281,81 @@ async def process(
     quality: str = Form("screen"),
     token: str = Form(""),
 ):
-    if not file.filename.lower().endswith(".pdf"):
-        return HTMLResponse("❌ Solo PDFs.", 400)
+    # 1) Validación extensión
+    if not (file.filename or "").lower().endswith(".pdf"):
+        return HTMLResponse("❌ Solo se aceptan PDFs.", status_code=400)
 
-    if quality not in {"screen", "ebook", "printer"}:
+    # 2) Calidad
+    allowed_qualities = {"screen", "ebook", "printer"}
+    if quality not in allowed_qualities:
         quality = "screen"
 
-    max_mb, monthly_limit, plan = plan_limits_for_token(token)
-    month = month_str()
+    # 3) Plan + límites
+    max_mb, monthly_limit, plan_name = plan_limits_for_token(token)
+    m = month_str()
 
-    if plan == "free":
-        key_type, key_value = "ip", get_client_ip(request)
+    if plan_name == "free":
+        key_type = "ip"
+        key_value = get_client_ip(request)
     else:
-        key_type, key_value = "token", token
+        key_type = "token"
+        key_value = token
 
-    if get_used(key_type, key_value, month) >= monthly_limit:
-        return HTMLResponse("❌ Límite mensual alcanzado.", 429)
+    used = get_used(key_type, key_value, m)
+    if used >= monthly_limit:
+        if plan_name == "free":
+            return HTMLResponse(f"Has alcanzado el límite Gratis ({FREE_MONTHLY_LIMIT} PDFs/mes).", status_code=429)
+        if plan_name == "pro":
+            return HTMLResponse(f"Has alcanzado el límite Pro ({PRO_MONTHLY_LIMIT} PDFs/mes).", status_code=429)
+        return HTMLResponse(f"Has alcanzado el límite Business ({BUSINESS_MONTHLY_LIMIT} PDFs/mes).", status_code=429)
 
+    # 4) Tamaño max
     data_in = await file.read()
     original_bytes = len(data_in)
 
     if original_bytes > max_mb * 1024 * 1024:
-        return HTMLResponse(f"❌ Máximo {max_mb} MB.", 413)
+        if plan_name == "free":
+            return HTMLResponse(f"Has superado el límite Gratis ({FREE_MAX_MB} MB).", status_code=413)
+        if plan_name == "pro":
+            return HTMLResponse(f"Has superado el límite Pro ({PRO_MAX_MB} MB).", status_code=413)
+        return HTMLResponse(f"Has superado el límite Business ({BUSINESS_MAX_MB} MB).", status_code=413)
 
+    job_id = str(uuid.uuid4())
+
+    # por si clean_pdf falla antes de devolver stats
     stats = {"total": "", "removed": ""}
 
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp = Path(tmp)
-        inp = tmp / "in.pdf"
-        cleaned = tmp / "clean.pdf"
-        outp = tmp / "out.pdf"
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        inp = tmpdir / f"{job_id}_input.pdf"
+        cleaned = tmpdir / f"{job_id}_cleaned.pdf"
+        outp = tmpdir / f"{job_id}_output.pdf"
 
         inp.write_bytes(data_in)
 
-        stats = clean_pdf(str(inp), str(cleaned))
-        compress_with_ghostscript(str(cleaned), str(outp), quality)
+        try:
+            stats = clean_pdf(str(inp), str(cleaned))
+            compress_with_ghostscript(str(cleaned), str(outp), quality)
 
-        data_out = outp.read_bytes()
-        final_bytes = len(data_out)
+            if not outp.exists():
+                return HTMLResponse("❌ No se generó el archivo final.", status_code=500)
 
-    reduction_pct = (
-        0.0 if original_bytes == 0
-        else max(0.0, (1 - final_bytes / original_bytes) * 100)
-    )
+            data_out = outp.read_bytes()
+            final_bytes = len(data_out)
 
-    inc_used(key_type, key_value, month)
+        except FileNotFoundError:
+            return HTMLResponse("❌ Error: Ghostscript no está disponible en el servidor.", status_code=500)
+        except Exception as e:
+            return HTMLResponse(f"❌ Error procesando el PDF:\n\n{e}", status_code=500)
+
+    # 5) % reducción
+    if original_bytes <= 0:
+        reduction_pct = 0.0
+    else:
+        reduction_pct = max(0.0, (1.0 - (final_bytes / original_bytes)) * 100.0)
+
+    # 6) Cuenta uso (solo si todo OK)
+    inc_used(key_type, key_value, m)
 
     return Response(
         content=data_out,
