@@ -19,12 +19,11 @@ app = FastAPI(title="PDF Cleaner & Compressor")
 # =========
 # VERSION
 # =========
-APP_VERSION = "2025-12-26-v9-fix-placeholders"
+APP_VERSION = "2025-12-26-v11-free-try-fixed"
 
 # =========
 # STRIPE
 # =========
-# ⚠️ VARIABLES DE ENTORNO (Render). NO PEGUES CLAVES EN CÓDIGO.
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")  # opcional
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "")  # ej: https://xxxxx.onrender.com
@@ -59,7 +58,7 @@ def _startup():
 
 
 # =========
-# HTML RENDER (NO Jinja) -> usamos replace seguro
+# HTML RENDER (replace seguro)
 # =========
 def _read_template(name: str) -> str:
     p = TEMPLATE_DIR / name
@@ -90,13 +89,18 @@ def _apply_vars(html: str) -> str:
 
 
 def render_landing_html() -> str:
-    html = _read_template("landing.html")
-    return _apply_vars(html)
+    return _apply_vars(_read_template("landing.html"))
 
 
-def render_app_html() -> str:
-    html = _read_template("app.html")
-    return _apply_vars(html)
+def render_app_html(token: str = "") -> str:
+    """
+    Renderiza app.html y, si hay token, lo inyecta para que el formulario pueda enviarlo.
+    En app.html puedes usar %%TOKEN%% o {TOKEN}.
+    """
+    html = _apply_vars(_read_template("app.html"))
+    token = token or ""
+    html = html.replace("%%TOKEN%%", token).replace("{TOKEN}", token)
+    return html
 
 
 # =========
@@ -156,9 +160,20 @@ def landing():
     return render_landing_html()
 
 
+# Rutas para tus botones /free y /try (evitan que el HTML “no haga nada”)
+@app.get("/free")
+def go_free():
+    return RedirectResponse(url="/app", status_code=303)
+
+
+@app.get("/try")
+def go_try():
+    return RedirectResponse(url="/app", status_code=303)
+
+
 @app.get("/app", response_class=HTMLResponse)
-def app_page():
-    return render_app_html()
+def app_page(token: str = ""):
+    return HTMLResponse(render_app_html(token=token))
 
 
 # =========
@@ -265,7 +280,7 @@ async def process(
     request: Request,
     file: UploadFile = File(...),
     quality: str = Form("screen"),
-    token: str = "",  # ?token=...
+    token: str = Form(""),  # IMPORTANTE: lo recibimos desde el FORM (hidden input)
 ):
     # 1) Validación extensión
     if not (file.filename or "").lower().endswith(".pdf"):
