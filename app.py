@@ -13,17 +13,18 @@ import stripe
 from clean_pdf import clean_pdf, compress_with_ghostscript
 from db import init_db, save_token, get_token, get_used, inc_used
 
+
 app = FastAPI(title="PDF Cleaner & Compressor")
 
 # =========
 # VERSION
 # =========
-APP_VERSION = "2025-12-25-v8-templates-db"
+APP_VERSION = "2025-12-26-v9-fix-placeholders"
 
 # =========
 # STRIPE
 # =========
-# ⚠️ PON ESTO EN VARIABLES DE ENTORNO (Render/servidor). NO PEGUES CLAVES EN CÓDIGO.
+# ⚠️ VARIABLES DE ENTORNO (Render). NO PEGUES CLAVES EN CÓDIGO.
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")  # opcional
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "")  # ej: https://xxxxx.onrender.com
@@ -48,7 +49,7 @@ BUSINESS_MONTHLY_LIMIT = 200
 # =========
 # FILES
 # =========
-BASE_DIR = Path(__file__).parent
+BASE_DIR = Path(__file__).resolve().parent
 TEMPLATE_DIR = BASE_DIR / "templates"
 
 
@@ -58,7 +59,7 @@ def _startup():
 
 
 # =========
-# HTML RENDER (sin format: usamos replace)
+# HTML RENDER (NO Jinja) -> usamos replace seguro
 # =========
 def _read_template(name: str) -> str:
     p = TEMPLATE_DIR / name
@@ -67,21 +68,24 @@ def _read_template(name: str) -> str:
 
 def _apply_vars(html: str) -> str:
     """
-    Sustituye SOLO placeholders de negocio (no toca llaves del CSS).
-    Funciona si en tu HTML tienes placeholders como:
-      {FREE_MONTHLY_LIMIT}, {FREE_MAX_MB}, etc.
+    Sustituye placeholders de negocio en DOS formatos:
+      {FREE_MAX_MB}
+      %%FREE_MAX_MB%%
+    y NO toca llaves del CSS.
     """
-    replacements = {
-        "{FREE_MONTHLY_LIMIT}": str(FREE_MONTHLY_LIMIT),
-        "{FREE_MAX_MB}": str(FREE_MAX_MB),
-        "{PRO_MONTHLY_LIMIT}": str(PRO_MONTHLY_LIMIT),
-        "{PRO_MAX_MB}": str(PRO_MAX_MB),
-        "{BUSINESS_MONTHLY_LIMIT}": str(BUSINESS_MONTHLY_LIMIT),
-        "{BUSINESS_MAX_MB}": str(BUSINESS_MAX_MB),
-        "{APP_VERSION}": str(APP_VERSION),
+    values = {
+        "FREE_MONTHLY_LIMIT": str(FREE_MONTHLY_LIMIT),
+        "FREE_MAX_MB": str(FREE_MAX_MB),
+        "PRO_MONTHLY_LIMIT": str(PRO_MONTHLY_LIMIT),
+        "PRO_MAX_MB": str(PRO_MAX_MB),
+        "BUSINESS_MONTHLY_LIMIT": str(BUSINESS_MONTHLY_LIMIT),
+        "BUSINESS_MAX_MB": str(BUSINESS_MAX_MB),
+        "APP_VERSION": str(APP_VERSION),
     }
-    for k, v in replacements.items():
-        html = html.replace(k, v)
+
+    for key, val in values.items():
+        html = html.replace(f"{{{key}}}", val)   # {KEY}
+        html = html.replace(f"%%{key}%%", val)   # %%KEY%%
     return html
 
 
@@ -91,7 +95,6 @@ def render_landing_html() -> str:
 
 
 def render_app_html() -> str:
-    # En tu app.html no necesitas variables (pero si hay APP_VERSION, lo sustituimos)
     html = _read_template("app.html")
     return _apply_vars(html)
 
