@@ -14,54 +14,133 @@
     body{margin:0;background:var(--bg);color:var(--text);
       font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial}
     a{color:inherit;text-decoration:none}
-    .wrap{max-width:1080px;margin:0 auto;padding:28px 18px 70px}
+    .wrap{max-width:980px;margin:0 auto;padding:28px 18px 70px}
     .top{display:flex;align-items:center;justify-content:space-between;gap:14px}
     .brand{display:flex;align-items:center;gap:10px;font-weight:900}
     .badge{font-size:12px;padding:6px 10px;border-radius:999px;background:#111;color:#fff}
     .nav{display:flex;gap:14px;font-size:13px;color:var(--muted)}
 
-    .hero{margin-top:18px;background:var(--card);border:1px solid var(--line);
-      border-radius:18px;padding:22px;box-shadow:var(--shadow);
-      display:grid;grid-template-columns:1.1fr 0.9fr;gap:16px}
-    @media(max-width:900px){.hero{grid-template-columns:1fr}}
+    .card{margin-top:18px;background:var(--card);border:1px solid var(--line);
+      border-radius:18px;padding:22px;box-shadow:var(--shadow)}
 
-    h1{margin:0 0 8px;font-size:34px;line-height:1.15;letter-spacing:-0.5px}
-    .sub{margin:0 0 14px;color:var(--muted);font-size:14px;line-height:1.5}
+    h1{margin:0 0 10px;font-size:34px;line-height:1.15;letter-spacing:-0.5px}
+    .sub{margin:0 0 16px;color:var(--muted);font-size:14px;line-height:1.5}
 
-    .card{background:#fff;border:1px solid var(--line);border-radius:16px;padding:16px;box-shadow:0 8px 22px rgba(0,0,0,0.04)}
-    .row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
-
-    .btn{border-radius:12px;padding:12px 16px;border:1px solid #111;
-      font-weight:800;font-size:14px;cursor:pointer;display:inline-flex;align-items:center;gap:8px}
-    .btn.primary{background:var(--btn);color:#fff}
-    .btn.secondary{background:var(--btn2);color:#111}
-
-    .field{display:flex;flex-direction:column;gap:6px;margin:10px 0}
+    .field{display:flex;flex-direction:column;gap:6px;margin:12px 0}
     label{font-size:13px;color:var(--muted)}
     input[type="file"], select{
       padding:10px;border-radius:12px;border:1px solid var(--line);background:#fff;
       font-size:14px;
     }
 
-    .note{font-size:12px;color:var(--muted);line-height:1.4;margin-top:10px}
+    .row{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-top:14px}
+    .btn{border-radius:12px;padding:12px 16px;border:1px solid #111;
+      font-weight:800;font-size:14px;cursor:pointer;display:inline-flex;align-items:center;gap:8px}
+    .btn.primary{background:var(--btn);color:#fff}
+    .btn.secondary{background:var(--btn2);color:#111}
+
+    .status{margin-top:12px;font-size:13px;color:var(--muted)}
     .ok{color:var(--ok);font-weight:900}
     .danger{color:var(--danger);font-weight:900}
+    .hidden{display:none}
+
+    .result{
+      margin-top:16px;
+      padding:14px;
+      border-radius:14px;
+      border:1px solid var(--line);
+      background:#fafafa;
+      font-size:13px;
+      color:var(--muted);
+      line-height:1.6;
+    }
+    .result b{color:var(--text)}
     .footer{margin-top:18px;text-align:center;color:var(--muted);font-size:12px}
-    .pill{display:inline-block;font-size:12px;padding:5px 10px;border-radius:999px;border:1px solid var(--line);color:var(--muted)}
-    .mono{font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;}
   </style>
 
   <script>
-    function setBusy(on){
-      const btn = document.getElementById("submitBtn");
-      const hint = document.getElementById("hint");
-      btn.disabled = on;
-      btn.style.opacity = on ? "0.7" : "1";
-      hint.textContent = on ? "Procesando… (si el PDF es grande puede tardar unos segundos)" : "";
+    function fmtBytes(bytes){
+      const units = ["B","KB","MB","GB"];
+      let i = 0;
+      let n = Number(bytes || 0);
+      while(n >= 1024 && i < units.length-1){ n /= 1024; i++; }
+      return `${n.toFixed(i === 0 ? 0 : 2)} ${units[i]}`;
     }
-    function onSubmit(){
-      setBusy(true);
-      return true;
+
+    async function handleSubmit(ev){
+      ev.preventDefault();
+
+      const form = document.getElementById("pdfForm");
+      const btn = document.getElementById("submitBtn");
+      const status = document.getElementById("status");
+      const result = document.getElementById("result");
+      const download = document.getElementById("downloadLink");
+
+      result.classList.add("hidden");
+      download.classList.add("hidden");
+      download.href = "#";
+      download.textContent = "";
+
+      btn.disabled = true;
+      btn.style.opacity = "0.7";
+      status.textContent = "Procesando… (si el PDF es grande puede tardar unos segundos)";
+
+      try{
+        const fd = new FormData(form);
+
+        const res = await fetch("/process", {
+          method: "POST",
+          body: fd
+        });
+
+        if(!res.ok){
+          const txt = await res.text();
+          status.innerHTML = `<span class="danger">Error:</span> ${txt}`;
+          btn.disabled = false;
+          btn.style.opacity = "1";
+          return;
+        }
+
+        // headers
+        const inBytes = res.headers.get("x-input-bytes");
+        const outBytes = res.headers.get("x-output-bytes");
+        const reduction = res.headers.get("x-reduction-pct");
+        const totalPages = res.headers.get("x-total-pages");
+        const removedPages = res.headers.get("x-removed-pages");
+
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+
+        // filename (si viene en content-disposition)
+        let filename = "output.pdf";
+        const cd = res.headers.get("content-disposition") || "";
+        const m = cd.match(/filename="([^"]+)"/);
+        if(m && m[1]) filename = m[1];
+
+        download.href = url;
+        download.download = filename;
+        download.textContent = `⬇️ Descargar ${filename}`;
+        download.classList.remove("hidden");
+
+        // pinta resultado
+        const parts = [];
+        if(reduction !== null) parts.push(`<b>Reducción:</b> <span class="ok">${reduction}%</span>`);
+        if(inBytes !== null && outBytes !== null){
+          parts.push(`<b>Tamaño:</b> ${fmtBytes(inBytes)} → ${fmtBytes(outBytes)}`);
+        }
+        if(totalPages) parts.push(`<b>Páginas:</b> ${totalPages}${removedPages ? ` (quitadas: ${removedPages})` : ""}`);
+
+        result.innerHTML = parts.join("<br>");
+        result.classList.remove("hidden");
+
+        status.innerHTML = `<span class="ok">Listo.</span>`;
+
+      }catch(e){
+        status.innerHTML = `<span class="danger">Error:</span> ${e}`;
+      }finally{
+        btn.disabled = false;
+        btn.style.opacity = "1";
+      }
     }
   </script>
 </head>
@@ -76,62 +155,46 @@
       </div>
     </div>
 
-    <section class="hero">
-      <div class="card">
-        <h1>Herramienta</h1>
-        <p class="sub">
-          Sube tu PDF y descárgalo optimizado: <span class="ok">limpia páginas en blanco</span> + <span class="ok">reduce peso</span>.
-          No guardamos tus archivos.
-        </p>
+    <div class="card">
+      <h1>Herramienta</h1>
+      <p class="sub">
+        Sube tu PDF y descárgalo optimizado: <span class="ok">limpia páginas en blanco</span> + <span class="ok">reduce peso</span>.
+      </p>
 
-        <form action="/process" method="post" enctype="multipart/form-data" onsubmit="return onSubmit()">
-          <!-- ✅ TOKEN (se rellena desde app.py con /app?token=...) -->
-          <input type="hidden" name="token" value="%%TOKEN%%">
+      <form id="pdfForm" onsubmit="handleSubmit(event)" enctype="multipart/form-data">
+        <!-- ✅ token (inyectado por app.py cuando entras con /app?token=...) -->
+        <input type="hidden" name="token" value="%%TOKEN%%">
 
-          <div class="field">
-            <label><b>1) PDF</b> (solo .pdf)</label>
-            <input type="file" name="file" accept="application/pdf" required>
-          </div>
+        <div class="field">
+          <label><b>1) PDF</b> (solo .pdf)</label>
+          <input type="file" name="file" accept="application/pdf" required>
+        </div>
 
-          <div class="field">
-            <label><b>2) Calidad / Compresión</b></label>
-            <select name="quality">
-              <option value="screen">Máxima compresión (screen) — ideal para email</option>
-              <option value="ebook">Equilibrado (ebook) — buena calidad</option>
-              <option value="printer">Mejor calidad (printer) — menos compresión</option>
-            </select>
-          </div>
+        <div class="field">
+          <label><b>2) Calidad / Compresión</b></label>
+          <select name="quality">
+            <option value="screen">Máxima compresión (screen) — ideal para email</option>
+            <option value="ebook">Equilibrado (ebook) — buena calidad</option>
+            <option value="printer">Mejor calidad (printer) — menos compresión</option>
+          </select>
+        </div>
 
-          <div class="row">
-            <button id="submitBtn" class="btn primary" type="submit">✅ Limpiar y descargar</button>
-            <a class="btn secondary" href="/">Volver</a>
-          </div>
+        <div class="row">
+          <button id="submitBtn" class="btn primary" type="submit">✅ Limpiar y descargar</button>
+          <a class="btn secondary" href="/">Volver</a>
+        </div>
 
-          <div id="hint" class="note"></div>
+        <div id="status" class="status"></div>
 
-          <div class="note">
-            <span class="pill">Gratis: {FREE_MONTHLY_LIMIT} PDFs/mes · máx. {FREE_MAX_MB} MB</span>
-            <span class="pill">Pro: {PRO_MONTHLY_LIMIT} PDFs/mes · máx. {PRO_MAX_MB} MB</span>
-            <span class="pill">Business: {BUSINESS_MONTHLY_LIMIT} PDFs/mes · máx. {BUSINESS_MAX_MB} MB</span>
-          </div>
+        <div id="result" class="result hidden"></div>
 
-          <div class="note">
-            Si has pagado y aun así te limita como gratis: estás entrando sin token.
-            Vuelve desde Stripe (te redirige automáticamente a <span class="mono">/app?token=...</span>).
-          </div>
-        </form>
-      </div>
+        <div class="row" style="margin-top:12px;">
+          <a id="downloadLink" class="btn primary hidden" href="#">⬇️ Descargar</a>
+        </div>
 
-      <div class="card">
-        <b>Tips rápidos</b>
-        <ul style="margin:10px 0 0; padding-left:18px; color:var(--muted); font-size:13px; line-height:1.6;">
-          <li>Para máximo ahorro de peso: usa <b>screen</b>.</li>
-          <li>Si es un PDF escaneado, suele bajar mucho más.</li>
-          <li>Si te sale error de Ghostscript, Render no lo tiene instalado (habría que meter buildpack/apt).</li>
-        </ul>
         <div class="footer">Versión: {APP_VERSION}</div>
-      </div>
-    </section>
+      </form>
+    </div>
   </div>
 </body>
 </html>

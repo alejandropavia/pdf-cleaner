@@ -353,5 +353,8 @@ async def process(
             "Content-Disposition": f'attachment; filename="{file.filename}"',
             "X-Total-Pages": str(stats.get("total", "")),
             "X-Removed-Pages": str(stats.get("removed", "")),
+            "X-Input-Bytes": str(original_bytes),
+            "X-Output-Bytes": str(final_bytes),
+            "X-Reduction-Pct": f"{reduction_pct:.1f}",
         },
     )
