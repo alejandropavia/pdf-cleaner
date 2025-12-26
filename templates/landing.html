@@ -30,8 +30,11 @@
     .sub{margin:0 0 10px;color:var(--muted);font-size:15px;line-height:1.5}
     .proline{margin:0 0 18px;font-size:14px;color:#0f172a}
     .ctaRow{display:flex;gap:12px;flex-wrap:wrap}
-    .btn{border-radius:12px;padding:12px 16px;border:1px solid #111;
-      font-weight:800;font-size:14px;cursor:pointer;display:inline-flex;align-items:center;gap:8px}
+    .btn{
+      border-radius:12px;padding:12px 16px;border:1px solid #111;
+      font-weight:800;font-size:14px;cursor:pointer;display:inline-flex;align-items:center;gap:8px;
+      user-select:none;
+    }
     .btn.primary{background:var(--btn);color:#fff}
     .btn.secondary{background:var(--btn2);color:#111}
     .mini{margin-top:10px;color:var(--muted);font-size:12px}
@@ -54,7 +57,17 @@
       color:var(--muted);margin-top:8px}
     .planCta{margin-top:12px}
     .footer{margin-top:22px;text-align:center;color:var(--muted);font-size:12px}
+
+    /* fallback: si hubiese overlays raros, asegurar click */
+    .btn{position:relative; z-index:5;}
   </style>
+
+  <script>
+    function go(url){
+      try { window.location.href = url; } catch(e) {}
+      return false;
+    }
+  </script>
 </head>
 <body>
   <div class="wrap">
@@ -76,7 +89,8 @@
         <p class="proline"><span class="check">✓</span> <b>Herramienta profesional</b> pensada para uso real en empresa.</p>
 
         <div class="ctaRow">
-          <a class="btn primary" href="/app">✅ Probar ahora</a>
+          <!-- Si ya pusiste el app.py nuevo con /try, usa /try. Si no, cambia /try por /app -->
+          <a class="btn primary" href="/try" onclick="return go('/try')">✅ Probar ahora</a>
         </div>
 
         <div class="mini">
@@ -105,7 +119,8 @@
         </ul>
         <div class="tag">Limitado para empresas → recomendado Business</div>
         <div class="planCta">
-          <a class="btn secondary" href="/app">Empezar</a>
+          <!-- Si ya pusiste el app.py nuevo con /free, usa /free. Si no, cambia /free por /app -->
+          <a class="btn secondary" href="/free" onclick="return go('/free')">Empezar</a>
         </div>
       </div>
 
