@@ -72,7 +72,7 @@
 <body>
   <div class="wrap">
     <div class="top">
-      <div class="brand"><span class="badge">B2B</span> PDF Cleaner</div>
+      <div class="brand"><span class="badge">PDF</span> PDF Cleaner</div>
       <div class="nav">
         <a href="#precios">Precios</a>
         <a href="/app">Herramienta</a>
@@ -86,10 +86,10 @@
           Limpia páginas en blanco y comprime tus PDFs para email y portales.
           Sin instalaciones. Resultado inmediato.
         </p>
-        <p class="proline"><span class="check">✓</span> <b>Herramienta profesional</b> pensada para uso real en empresa.</p>
+        <p class="proline"><span class="check">✓</span> <b>Pensado para autónomos y microestudios</b> (arquitectura, ingeniería, peritaje, reformas…) que necesitan enviar PDFs pesados sin perder tiempo.</p>
 
         <div class="ctaRow">
-          <!-- Si ya pusiste el app.py nuevo con /try, usa /try. Si no, cambia /try por /app -->
+          <!-- /try redirige a /app -->
           <a class="btn primary" href="/try" onclick="return go('/try')">✅ Probar ahora</a>
         </div>
 
@@ -104,6 +104,7 @@
           <li>Te rechazan el PDF por tamaño</li>
           <li>Necesitas enviarlo por email rápido</li>
           <li>Trabajas con PDFs escaneados pesados</li>
+          <li><span class="check">✓</span> Se procesa y se elimina automáticamente tras terminar</li>
         </ul>
       </div>
     </section>
@@ -117,10 +118,22 @@
           <li>Máx. <b>%%FREE_MAX_MB%% MB</b> por PDF</li>
           <li>3 calidades (máxima por defecto)</li>
         </ul>
-        <div class="tag">Limitado para empresas → recomendado Business</div>
+        <div class="tag">Para probar rápido</div>
         <div class="planCta">
-          <!-- Si ya pusiste el app.py nuevo con /free, usa /free. Si no, cambia /free por /app -->
           <a class="btn secondary" href="/free" onclick="return go('/free')">Empezar</a>
+        </div>
+      </div>
+
+      <div class="plan">
+        <h3>Básico</h3>
+        <div class="price">5€ / mes</div>
+        <ul>
+          <li>Hasta <b>%%BASIC_MONTHLY_LIMIT%% PDFs/mes</b></li>
+          <li>Máx. <b>%%BASIC_MAX_MB%% MB</b> por PDF</li>
+          <li>Para uso recurrente</li>
+        </ul>
+        <div class="planCta">
+          <a class="btn primary" href="/checkout/basic">Empezar</a>
         </div>
       </div>
 
@@ -130,23 +143,10 @@
         <ul>
           <li>Hasta <b>%%PRO_MONTHLY_LIMIT%% PDFs/mes</b></li>
           <li>Máx. <b>%%PRO_MAX_MB%% MB</b> por PDF</li>
-          <li>Para uso frecuente</li>
+          <li>Para picos de trabajo</li>
         </ul>
         <div class="planCta">
           <a class="btn primary" href="/checkout/pro">Empezar</a>
-        </div>
-      </div>
-
-      <div class="plan">
-        <h3>Business</h3>
-        <div class="price">15€ / mes</div>
-        <ul>
-          <li>Hasta <b>%%BUSINESS_MONTHLY_LIMIT%% PDFs/mes</b></li>
-          <li>Máx. <b>%%BUSINESS_MAX_MB%% MB</b> por PDF</li>
-          <li>Prioridad alta</li>
-        </ul>
-        <div class="planCta">
-          <a class="btn primary" href="/checkout/business">Empezar</a>
         </div>
       </div>
     </section>

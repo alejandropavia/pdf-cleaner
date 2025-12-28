@@ -8,6 +8,9 @@ from datetime import date
 from fastapi import FastAPI, UploadFile, File, Form, Request
 from fastapi.responses import HTMLResponse, Response, PlainTextResponse, RedirectResponse
 
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
+
 import stripe
 
 from clean_pdf import clean_pdf, compress_with_ghostscript
@@ -19,7 +22,7 @@ app = FastAPI(title="PDF Cleaner & Compressor")
 # =========
 # VERSION
 # =========
-APP_VERSION = "2025-12-26-v12-business-100mb"
+APP_VERSION = "2025-12-27-v13-basic-pro-security"
 
 # =========
 # STRIPE
@@ -27,23 +30,28 @@ APP_VERSION = "2025-12-26-v12-business-100mb"
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")  # opcional
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "")  # ej: https://xxxxx.onrender.com
-STRIPE_PRICE_PRO = os.getenv("STRIPE_PRICE_PRO", "")
-STRIPE_PRICE_BUSINESS = os.getenv("STRIPE_PRICE_BUSINESS", "")
+
+# Nuevos price IDs (recomendado)
+STRIPE_PRICE_BASIC = os.getenv("STRIPE_PRICE_BASIC", "")  # 5€
+STRIPE_PRICE_PRO = os.getenv("STRIPE_PRICE_PRO", "")      # 9€
+
+# Backward compatibility (si tu landing aún apunta a "business")
+STRIPE_PRICE_BUSINESS = os.getenv("STRIPE_PRICE_BUSINESS", "")  # legacy (antes "business")
 
 if STRIPE_SECRET_KEY:
     stripe.api_key = STRIPE_SECRET_KEY
 
 # =========
-# LIMITES
+# LIMITES (NUEVOS)
 # =========
 FREE_MAX_MB = 5
-FREE_MONTHLY_LIMIT = 5
+FREE_MONTHLY_LIMIT = 3
 
-PRO_MAX_MB = 15
-PRO_MONTHLY_LIMIT = 50
+BASIC_MAX_MB = 15
+BASIC_MONTHLY_LIMIT = 50
 
-BUSINESS_MAX_MB = 100   # ✅ SUBIDO A 100
-BUSINESS_MONTHLY_LIMIT = 200
+PRO_MAX_MB = 100
+PRO_MONTHLY_LIMIT = 200
 
 # =========
 # FILES
@@ -58,6 +66,38 @@ def _startup():
 
 
 # =========
+# SECURITY MIDDLEWARE
+# =========
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        resp = await call_next(request)
+
+        # Security headers (baratos y útiles)
+        resp.headers["X-Content-Type-Options"] = "nosniff"
+        resp.headers["X-Frame-Options"] = "DENY"
+        resp.headers["Referrer-Policy"] = "no-referrer"
+        resp.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+
+        # HSTS solo tiene sentido si vas siempre en HTTPS (Render sí).
+        # No pasa nada por ponerlo.
+        resp.headers["Strict-Transport-Security"] = "max-age=15552000; includeSubDomains"
+
+        return resp
+
+
+app.add_middleware(SecurityHeadersMiddleware)
+
+# Trusted hosts opcional:
+# - Si defines ALLOWED_HOSTS, bloquea hosts raros (anti-ataques tontos).
+# - Ej: ALLOWED_HOSTS="tudominio.com,.tudominio.com,xxxx.onrender.com"
+allowed_hosts_env = os.getenv("ALLOWED_HOSTS", "").strip()
+if allowed_hosts_env:
+    allowed_hosts = [h.strip() for h in allowed_hosts_env.split(",") if h.strip()]
+    if allowed_hosts:
+        app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts)
+
+
+# =========
 # HTML RENDER (replace seguro)
 # =========
 def _read_template(name: str) -> str:
@@ -68,17 +108,27 @@ def _read_template(name: str) -> str:
 def _apply_vars(html: str) -> str:
     """
     Sustituye placeholders de negocio en DOS formatos:
-      {FREE_MAX_MB}
-      %%FREE_MAX_MB%%
+      {KEY}
+      %%KEY%%
     y NO toca llaves del CSS.
     """
     values = {
+        # FREE
         "FREE_MONTHLY_LIMIT": str(FREE_MONTHLY_LIMIT),
         "FREE_MAX_MB": str(FREE_MAX_MB),
+
+        # BASIC (5€)
+        "BASIC_MONTHLY_LIMIT": str(BASIC_MONTHLY_LIMIT),
+        "BASIC_MAX_MB": str(BASIC_MAX_MB),
+
+        # PRO (9€)
         "PRO_MONTHLY_LIMIT": str(PRO_MONTHLY_LIMIT),
         "PRO_MAX_MB": str(PRO_MAX_MB),
-        "BUSINESS_MONTHLY_LIMIT": str(BUSINESS_MONTHLY_LIMIT),
-        "BUSINESS_MAX_MB": str(BUSINESS_MAX_MB),
+
+        # Compatibilidad si tu HTML aún usa BUSINESS_*
+        "BUSINESS_MONTHLY_LIMIT": str(PRO_MONTHLY_LIMIT),
+        "BUSINESS_MAX_MB": str(PRO_MAX_MB),
+
         "APP_VERSION": str(APP_VERSION),
     }
 
@@ -125,11 +175,16 @@ def plan_limits_for_token(token: str):
     if token:
         row = get_token(token)
         if row:
-            plan = row["plan"]
+            plan = (row["plan"] or "").lower().strip()
+            if plan == "basic":
+                return BASIC_MAX_MB, BASIC_MONTHLY_LIMIT, "basic"
             if plan == "pro":
                 return PRO_MAX_MB, PRO_MONTHLY_LIMIT, "pro"
+
+            # compatibilidad legacy (si hay tokens antiguos "business")
             if plan == "business":
-                return BUSINESS_MAX_MB, BUSINESS_MONTHLY_LIMIT, "business"
+                return PRO_MAX_MB, PRO_MONTHLY_LIMIT, "pro"
+
     return FREE_MAX_MB, FREE_MONTHLY_LIMIT, "free"
 
 
@@ -178,6 +233,27 @@ def app_page(token: str = ""):
 # =========
 # STRIPE CHECKOUT
 # =========
+@app.get("/checkout/basic")
+def checkout_basic(request: Request):
+    missing = _ensure_stripe_ready()
+    if missing or not STRIPE_PRICE_BASIC:
+        return HTMLResponse(
+            f"❌ Stripe no está configurado. Revisa {missing or 'STRIPE_PRICE_BASIC'}.",
+            status_code=500,
+        )
+
+    success_url = f"{PUBLIC_BASE_URL}/success?session_id={{CHECKOUT_SESSION_ID}}"
+    cancel_url = f"{PUBLIC_BASE_URL}/#precios"
+
+    session = stripe.checkout.Session.create(
+        mode="subscription",
+        line_items=[{"price": STRIPE_PRICE_BASIC, "quantity": 1}],
+        success_url=success_url,
+        cancel_url=cancel_url,
+    )
+    return RedirectResponse(session.url, status_code=303)
+
+
 @app.get("/checkout/pro")
 def checkout_pro(request: Request):
     missing = _ensure_stripe_ready()
@@ -199,25 +275,29 @@ def checkout_pro(request: Request):
     return RedirectResponse(session.url, status_code=303)
 
 
+# Backward compatibility: si tu landing todavía llama a /checkout/business
 @app.get("/checkout/business")
-def checkout_business(request: Request):
-    missing = _ensure_stripe_ready()
-    if missing or not STRIPE_PRICE_BUSINESS:
-        return HTMLResponse(
-            f"❌ Stripe no está configurado. Revisa {missing or 'STRIPE_PRICE_BUSINESS'}.",
-            status_code=500,
+def checkout_business_legacy(request: Request):
+    # Si tienes el viejo PRICE_BUSINESS puesto, lo usamos como PRO para no romper.
+    if STRIPE_PRICE_BUSINESS and not STRIPE_PRICE_PRO:
+        # Caso legacy: el business antiguo actuará como PRO.
+        missing = _ensure_stripe_ready()
+        if missing:
+            return HTMLResponse(f"❌ Stripe no está configurado. Revisa {missing}.", status_code=500)
+
+        success_url = f"{PUBLIC_BASE_URL}/success?session_id={{CHECKOUT_SESSION_ID}}"
+        cancel_url = f"{PUBLIC_BASE_URL}/#precios"
+
+        session = stripe.checkout.Session.create(
+            mode="subscription",
+            line_items=[{"price": STRIPE_PRICE_BUSINESS, "quantity": 1}],
+            success_url=success_url,
+            cancel_url=cancel_url,
         )
+        return RedirectResponse(session.url, status_code=303)
 
-    success_url = f"{PUBLIC_BASE_URL}/success?session_id={{CHECKOUT_SESSION_ID}}"
-    cancel_url = f"{PUBLIC_BASE_URL}/#precios"
-
-    session = stripe.checkout.Session.create(
-        mode="subscription",
-        line_items=[{"price": STRIPE_PRICE_BUSINESS, "quantity": 1}],
-        success_url=success_url,
-        cancel_url=cancel_url,
-    )
-    return RedirectResponse(session.url, status_code=303)
+    # Si no, redirigimos al PRO nuevo.
+    return RedirectResponse(url="/checkout/pro", status_code=303)
 
 
 @app.get("/success")
@@ -235,9 +315,14 @@ def success(session_id: str = ""):
         plan = "pro"
         try:
             items = sess["line_items"]["data"]
-            if items and items[0]["price"]["id"] == STRIPE_PRICE_BUSINESS:
-                plan = "business"
-            elif items and items[0]["price"]["id"] == STRIPE_PRICE_PRO:
+            price_id = items[0]["price"]["id"] if items else ""
+
+            if STRIPE_PRICE_BASIC and price_id == STRIPE_PRICE_BASIC:
+                plan = "basic"
+            elif STRIPE_PRICE_PRO and price_id == STRIPE_PRICE_PRO:
+                plan = "pro"
+            elif STRIPE_PRICE_BUSINESS and price_id == STRIPE_PRICE_BUSINESS:
+                # legacy
                 plan = "pro"
         except Exception:
             pass
@@ -282,7 +367,8 @@ async def process(
     token: str = Form(""),
 ):
     # 1) Validación extensión
-    if not (file.filename or "").lower().endswith(".pdf"):
+    filename = (file.filename or "").strip()
+    if not filename.lower().endswith(".pdf"):
         return HTMLResponse("❌ Solo se aceptan PDFs.", status_code=400)
 
     # 2) Calidad
@@ -305,9 +391,9 @@ async def process(
     if used >= monthly_limit:
         if plan_name == "free":
             return HTMLResponse(f"Has alcanzado el límite Gratis ({FREE_MONTHLY_LIMIT} PDFs/mes).", status_code=429)
-        if plan_name == "pro":
-            return HTMLResponse(f"Has alcanzado el límite Pro ({PRO_MONTHLY_LIMIT} PDFs/mes).", status_code=429)
-        return HTMLResponse(f"Has alcanzado el límite Business ({BUSINESS_MONTHLY_LIMIT} PDFs/mes).", status_code=429)
+        if plan_name == "basic":
+            return HTMLResponse(f"Has alcanzado el límite Básico ({BASIC_MONTHLY_LIMIT} PDFs/mes).", status_code=429)
+        return HTMLResponse(f"Has alcanzado el límite Pro ({PRO_MONTHLY_LIMIT} PDFs/mes).", status_code=429)
 
     # 4) Tamaño max
     data_in = await file.read()
@@ -316,15 +402,14 @@ async def process(
     if original_bytes > max_mb * 1024 * 1024:
         if plan_name == "free":
             return HTMLResponse(f"Has superado el límite Gratis ({FREE_MAX_MB} MB).", status_code=413)
-        if plan_name == "pro":
-            return HTMLResponse(f"Has superado el límite Pro ({PRO_MAX_MB} MB).", status_code=413)
-        return HTMLResponse(f"Has superado el límite Business ({BUSINESS_MAX_MB} MB).", status_code=413)
+        if plan_name == "basic":
+            return HTMLResponse(f"Has superado el límite Básico ({BASIC_MAX_MB} MB).", status_code=413)
+        return HTMLResponse(f"Has superado el límite Pro ({PRO_MAX_MB} MB).", status_code=413)
 
     job_id = str(uuid.uuid4())
-
-    # por si clean_pdf falla antes de devolver stats
     stats = {"total": "", "removed": ""}
 
+    # Procesamos en carpeta temporal (se borra sola al terminar)
     with tempfile.TemporaryDirectory() as tmpdir:
         tmpdir = Path(tmpdir)
         inp = tmpdir / f"{job_id}_input.pdf"
@@ -357,15 +442,20 @@ async def process(
     # 6) Cuenta uso (solo si todo OK)
     inc_used(key_type, key_value, m)
 
+    # 7) Respuesta (sin cache, sin historias)
+    headers = {
+        "Content-Disposition": f'attachment; filename="{filename}"',
+        "Cache-Control": "no-store",
+        "Pragma": "no-cache",
+        "X-Total-Pages": str(stats.get("total", "")),
+        "X-Removed-Pages": str(stats.get("removed", "")),
+        "X-Input-Bytes": str(original_bytes),
+        "X-Output-Bytes": str(final_bytes),
+        "X-Reduction-Pct": f"{reduction_pct:.1f}",
+    }
+
     return Response(
         content=data_out,
         media_type="application/pdf",
-        headers={
-            "Content-Disposition": f'attachment; filename="{file.filename}"',
-            "X-Total-Pages": str(stats.get("total", "")),
-            "X-Removed-Pages": str(stats.get("removed", "")),
-            "X-Input-Bytes": str(original_bytes),
-            "X-Output-Bytes": str(final_bytes),
-            "X-Reduction-Pct": f"{reduction_pct:.1f}",
-        },
+        headers=headers,
     )
